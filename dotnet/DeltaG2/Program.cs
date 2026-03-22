@@ -27,7 +27,7 @@ internal static class Program
 
 public sealed class MainForm : Form
 {
-    private const string Version = "G6.44";
+    private const string Version = "G6.45";
     private const string SingBoxVersion = "1.13.3";
     private const string UpdateManifestUrl = "https://delta.zzao.de/latest.json";
     private const string DefaultExeUrlTemplate = "https://delta.zzao.de/releases/Delta v{0}.exe";
@@ -967,11 +967,10 @@ public sealed class MainForm : Form
         try
         {
             var appDir = GetDataDir();
-            var targetDll = Path.Combine(appDir, "wintun.dll");
+            var targetDll = Path.Combine(GetCoreDir(), "wintun.dll");
             if (File.Exists(targetDll)) return true;
 
-            var cacheDir = Path.Combine(appDir, "cache");
-            Directory.CreateDirectory(cacheDir);
+            var cacheDir = GetCacheDir();
             var cachedZip = Path.Combine(cacheDir, "wintun-0.14.1.zip");
 
             if (!File.Exists(cachedZip) || !VerifySha256(cachedZip, WintunZipSha256))
@@ -1876,10 +1875,10 @@ public sealed class MainForm : Form
         if (File.Exists(exeInApp)) return exeInApp;
 
         var dataDir = GetDataDir();
-        var exeInData = Path.Combine(dataDir, "sing-box.exe");
+        var exeInData = Path.Combine(GetCoreDir(), "sing-box.exe");
         if (File.Exists(exeInData)) return exeInData;
 
-        var zipPath = Path.Combine(dataDir, "sing-box.zip");
+        var zipPath = Path.Combine(GetCacheDir(), "sing-box.zip");
         var url = $"https://github.com/SagerNet/sing-box/releases/download/v{SingBoxVersion}/sing-box-{SingBoxVersion}-windows-amd64.zip";
 
         Log("未找到 sing-box.exe，开始下载...");
@@ -1890,7 +1889,7 @@ public sealed class MainForm : Form
         }
 
         CleanupStaleTemp();
-        var extractDir = Path.Combine(dataDir, "sing-box");
+        var extractDir = Path.Combine(GetCacheDir(), "sing-box");
         if (Directory.Exists(extractDir)) Directory.Delete(extractDir, true);
         ZipFile.ExtractToDirectory(zipPath, extractDir, true);
 
@@ -1906,7 +1905,7 @@ public sealed class MainForm : Form
     private async Task<string> WriteSingBoxConfigAsync(string processName, string serverIp, int serverPort, string token, string tunInterface, string tunCidr, bool useTunMode)
     {
         var dataDir = GetDataDir();
-        var cfgPath = Path.Combine(dataDir, "sing-box-delta.json");
+        var cfgPath = Path.Combine(GetConfigDir(), "sing-box-delta.json");
 
         var processExe = processName.Trim();
         var processBare = Path.GetFileNameWithoutExtension(processExe);
@@ -2338,14 +2337,51 @@ public sealed class MainForm : Form
         // 老板要求：配置与运行文件写在当前目录，不写 AppData
         var dir = Path.GetDirectoryName(Application.ExecutablePath) ?? AppContext.BaseDirectory;
         Directory.CreateDirectory(dir);
+        EnsureRuntimeLayout(dir);
         return dir;
+    }
+
+    private string GetConfigDir()
+    {
+        var d = Path.Combine(GetDataDir(), "config");
+        Directory.CreateDirectory(d);
+        return d;
+    }
+
+    private string GetCoreDir()
+    {
+        var d = Path.Combine(GetDataDir(), "core");
+        Directory.CreateDirectory(d);
+        return d;
+    }
+
+    private string GetCacheDir()
+    {
+        var d = Path.Combine(GetDataDir(), "cache");
+        Directory.CreateDirectory(d);
+        return d;
+    }
+
+    private string GetLogsDir()
+    {
+        var d = Path.Combine(GetDataDir(), "logs");
+        Directory.CreateDirectory(d);
+        return d;
+    }
+
+    private void EnsureRuntimeLayout(string root)
+    {
+        Directory.CreateDirectory(Path.Combine(root, "config"));
+        Directory.CreateDirectory(Path.Combine(root, "core"));
+        Directory.CreateDirectory(Path.Combine(root, "cache"));
+        Directory.CreateDirectory(Path.Combine(root, "logs"));
     }
 
     private DeltaSettings LoadSettings()
     {
         try
         {
-            var p = Path.Combine(GetDataDir(), "settings.json");
+            var p = Path.Combine(GetConfigDir(), "settings.json");
             if (!File.Exists(p)) return new DeltaSettings();
             var t = File.ReadAllText(p);
             return JsonSerializer.Deserialize<DeltaSettings>(t) ?? new DeltaSettings();
@@ -2370,7 +2406,7 @@ public sealed class MainForm : Form
     {
         try
         {
-            var p = Path.Combine(GetDataDir(), "settings.json");
+            var p = Path.Combine(GetConfigDir(), "settings.json");
             var s = new DeltaSettings
             {
                 Hy2Server = (_hy2Ip.Text ?? "").Trim(),
