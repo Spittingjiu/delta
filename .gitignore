@@ -1,0 +1,25 @@
+# build outputs
+bin/
+obj/
+dist/
+dist-g*/
+
+# tools
+*.zip
+*.exe
+
+# runtime data
+*.log
+settings.json
+sing-box-delta.json
+wintun.zip
+wintun/
+cache/
+
+# IDE
+.vs/
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db

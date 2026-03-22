@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>Delta</AssemblyName>
+    <RootNamespace>Delta</RootNamespace>
+    <ApplicationIcon>assets\delta.ico</ApplicationIcon>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <Platforms>x64</Platforms>
+  </PropertyGroup>
+  <ItemGroup>
+    <Content Include="..\..\hy2-client.exe">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+      <Link>hy2-client.exe</Link>
+    </Content>
+    <Content Include="..\..\sing-box.exe">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+      <Link>sing-box.exe</Link>
+    </Content>
+  </ItemGroup>
+</Project>
