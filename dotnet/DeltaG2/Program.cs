@@ -27,7 +27,7 @@ internal static class Program
 
 public sealed class MainForm : Form
 {
-    private const string Version = "G6.46";
+    private const string Version = "G6.47";
     private const string SingBoxVersion = "1.13.3";
     private const string UpdateManifestUrl = "https://delta.zzao.de/latest.json";
     private const string DefaultExeUrlTemplate = "https://delta.zzao.de/releases/Delta v{0}.exe";
@@ -2375,22 +2375,23 @@ public sealed class MainForm : Form
         Directory.CreateDirectory(Path.Combine(root, "core"));
         Directory.CreateDirectory(Path.Combine(root, "cache"));
         Directory.CreateDirectory(Path.Combine(root, "logs"));
-        MigrateLegacyRuntimeFiles();
+        MigrateLegacyRuntimeFiles(root);
     }
 
-    private void MigrateLegacyRuntimeFiles()
+    private void MigrateLegacyRuntimeFiles(string root)
     {
         try
         {
-            var root = Path.GetDirectoryName(Application.ExecutablePath) ?? AppContext.BaseDirectory;
+            var configDir = Path.Combine(root, "config");
+            var coreDir = Path.Combine(root, "core");
 
             var legacyPairs = new (string src, string dst)[]
             {
-                (Path.Combine(root, "settings.json"), Path.Combine(GetConfigDir(), "settings.json")),
-                (Path.Combine(root, "sing-box-delta.json"), Path.Combine(GetConfigDir(), "sing-box-delta.json")),
-                (Path.Combine(root, "sing-box.exe"), Path.Combine(GetCoreDir(), "sing-box.exe")),
-                (Path.Combine(root, "hy2-client.exe"), Path.Combine(GetCoreDir(), "hy2-client.exe")),
-                (Path.Combine(root, "wintun.dll"), Path.Combine(GetCoreDir(), "wintun.dll"))
+                (Path.Combine(root, "settings.json"), Path.Combine(configDir, "settings.json")),
+                (Path.Combine(root, "sing-box-delta.json"), Path.Combine(configDir, "sing-box-delta.json")),
+                (Path.Combine(root, "sing-box.exe"), Path.Combine(coreDir, "sing-box.exe")),
+                (Path.Combine(root, "hy2-client.exe"), Path.Combine(coreDir, "hy2-client.exe")),
+                (Path.Combine(root, "wintun.dll"), Path.Combine(coreDir, "wintun.dll"))
             };
 
             foreach (var (src, dst) in legacyPairs)
