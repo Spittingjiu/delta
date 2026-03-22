@@ -27,8 +27,8 @@ internal static class Program
 
 public sealed class MainForm : Form
 {
-    private const string Version = "G6.37";
-    private const string SingBoxVersion = "1.10.3";
+    private const string Version = "G6.38";
+    private const string SingBoxVersion = "1.13.3";
     private const string UpdateManifestUrl = "https://delta.zzao.de/latest.json";
     private const string DefaultExeUrlTemplate = "https://delta.zzao.de/releases/Delta v{0}.exe";
     private const string DefaultSingBoxUrl = "https://delta.zzao.de/releases/sing-box.exe";
