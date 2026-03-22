@@ -27,7 +27,7 @@ internal static class Program
 
 public sealed class MainForm : Form
 {
-    private const string Version = "G6.45";
+    private const string Version = "G6.46";
     private const string SingBoxVersion = "1.13.3";
     private const string UpdateManifestUrl = "https://delta.zzao.de/latest.json";
     private const string DefaultExeUrlTemplate = "https://delta.zzao.de/releases/Delta v{0}.exe";
@@ -2221,11 +2221,11 @@ public sealed class MainForm : Form
 
             Log("下载最新 sing-box.exe ...");
             var singBytes = await http.GetByteArrayAsync(singUrl);
-            await File.WriteAllBytesAsync(Path.Combine(currentDir, "sing-box.exe"), singBytes);
+            await File.WriteAllBytesAsync(Path.Combine(GetCoreDir(), "sing-box.exe"), singBytes);
 
             Log("下载最新 hy2-client.exe ...");
             var hy2Bytes = await http.GetByteArrayAsync(hy2Url);
-            await File.WriteAllBytesAsync(Path.Combine(currentDir, "hy2-client.exe"), hy2Bytes);
+            await File.WriteAllBytesAsync(Path.Combine(GetCoreDir(), "hy2-client.exe"), hy2Bytes);
 
             _coreVersionsStatus.Text = $"核心：sing-box v{_latestSingBoxVersion ?? "?"} | hy2 {_latestHy2Version ?? "?"}";
 
@@ -2375,6 +2375,33 @@ public sealed class MainForm : Form
         Directory.CreateDirectory(Path.Combine(root, "core"));
         Directory.CreateDirectory(Path.Combine(root, "cache"));
         Directory.CreateDirectory(Path.Combine(root, "logs"));
+        MigrateLegacyRuntimeFiles();
+    }
+
+    private void MigrateLegacyRuntimeFiles()
+    {
+        try
+        {
+            var root = Path.GetDirectoryName(Application.ExecutablePath) ?? AppContext.BaseDirectory;
+
+            var legacyPairs = new (string src, string dst)[]
+            {
+                (Path.Combine(root, "settings.json"), Path.Combine(GetConfigDir(), "settings.json")),
+                (Path.Combine(root, "sing-box-delta.json"), Path.Combine(GetConfigDir(), "sing-box-delta.json")),
+                (Path.Combine(root, "sing-box.exe"), Path.Combine(GetCoreDir(), "sing-box.exe")),
+                (Path.Combine(root, "hy2-client.exe"), Path.Combine(GetCoreDir(), "hy2-client.exe")),
+                (Path.Combine(root, "wintun.dll"), Path.Combine(GetCoreDir(), "wintun.dll"))
+            };
+
+            foreach (var (src, dst) in legacyPairs)
+            {
+                if (!File.Exists(src)) continue;
+                Directory.CreateDirectory(Path.GetDirectoryName(dst)!);
+                if (!File.Exists(dst)) File.Move(src, dst);
+                else File.Delete(src);
+            }
+        }
+        catch { }
     }
 
     private DeltaSettings LoadSettings()
