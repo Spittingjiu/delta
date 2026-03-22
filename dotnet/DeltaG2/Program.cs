@@ -27,7 +27,7 @@ internal static class Program
 
 public sealed class MainForm : Form
 {
-    private const string Version = "G6.48";
+    private const string Version = "G6.49";
     private const string SingBoxVersion = "1.13.3";
     private const string UpdateManifestUrl = "https://delta.zzao.de/latest.json";
     private const string DefaultExeUrlTemplate = "https://delta.zzao.de/releases/Delta v{0}.exe";
@@ -79,10 +79,8 @@ public sealed class MainForm : Form
     }
     private static string ReleaseNotes => $@"{Version} 更新内容
 
-- 模板实质化：Stable/Balanced/Performance 现在影响 TUN 与运行参数
-- Stable：更保守（sniff off、更长超时）
-- Balanced：默认平衡
-- Performance：更激进（更短超时、strict_route off）";
+- 修复转发时卡顿：降低核心日志刷屏、日志面板刷新节流
+- 启动与转发阶段默认只保留关键日志（详细日志可手动打开）";
 
     private readonly ComboBox _processCombo = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 320 };
     private readonly ComboBox _nodeCombo = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 180 };
@@ -163,6 +161,7 @@ public sealed class MainForm : Form
     private readonly List<LogEntry> _recentEngineLogs = new();
     private readonly List<LogEntry> _recentCoreLogs = new();
     private readonly List<LogEntry> _recentProbeLogs = new();
+    private DateTime _lastLogViewRefreshAt = DateTime.MinValue;
 
     private static string EngineStateZh(EngineState s) => s switch
     {
@@ -790,8 +789,13 @@ public sealed class MainForm : Form
             _engineProc.OutputDataReceived += (_, e) =>
             {
                 if (runId != _engineRunId) return;
-                if (!string.IsNullOrWhiteSpace(e.Data))
-                    BeginInvoke(() => LogCore($"[RUN#{runId}] {e.Data}"));
+                if (string.IsNullOrWhiteSpace(e.Data)) return;
+                var line = e.Data;
+                var important = line.Contains("ERROR", StringComparison.OrdinalIgnoreCase) ||
+                                line.Contains("WARN", StringComparison.OrdinalIgnoreCase) ||
+                                line.Contains("FATAL", StringComparison.OrdinalIgnoreCase);
+                if (_verboseLogs || important)
+                    BeginInvoke(() => LogCore($"[RUN#{runId}] {line}"));
             };
             _engineProc.ErrorDataReceived += (_, e) =>
             {
@@ -2483,7 +2487,11 @@ public sealed class MainForm : Form
         bucket.Add(e);
         if (bucket.Count > 200) bucket.RemoveRange(0, bucket.Count - 200);
         Log($"[{source}] {msg}");
-        RefreshLogViews();
+        if ((DateTime.Now - _lastLogViewRefreshAt).TotalMilliseconds > 350)
+        {
+            _lastLogViewRefreshAt = DateTime.Now;
+            RefreshLogViews();
+        }
     }
 
     private List<string> GetRecentCoreLogs(int n)
