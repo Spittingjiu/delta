@@ -27,7 +27,7 @@ internal static class Program
 
 public sealed class MainForm : Form
 {
-    private const string Version = "G6.50";
+    private const string Version = "G6.51";
     private const string SingBoxVersion = "1.13.3";
     private const string UpdateManifestUrl = "https://delta.zzao.de/latest.json";
     private const string DefaultExeUrlTemplate = "https://delta.zzao.de/releases/Delta v{0}.exe";
@@ -118,8 +118,9 @@ public sealed class MainForm : Form
     private readonly TextBox _hy2Sni = new() { Width = 160, Text = "www.bing.com", Visible = false };
     private readonly TextBox _hy2ObfsType = new() { Width = 110, PlaceholderText = "混淆类型", Visible = false };
     private readonly TextBox _hy2ObfsPassword = new() { Width = 140, PlaceholderText = "混淆密码", Visible = false };
-    private readonly TextBox _gameProcessPaths = new() { Width = 360, PlaceholderText = "游戏EXE全路径，支持多个(;分隔)" };
-    private readonly TextBox _launcherProcessPaths = new() { Width = 360, PlaceholderText = "启动器EXE全路径，可选，支持多个(;)" };
+    private readonly TextBox _gameFolderPaths = new() { Width = 520, PlaceholderText = "已选文件夹（自动包含其中所有.exe）" };
+    private readonly TextBox _gameProcessPaths = new() { Width = 360, PlaceholderText = "游戏EXE全路径，支持多个(;分隔)", Visible = false };
+    private readonly TextBox _launcherProcessPaths = new() { Width = 360, PlaceholderText = "启动器EXE全路径，可选，支持多个(;)", Visible = false };
 
     private readonly TextBox _log = new()
     {
@@ -325,8 +326,6 @@ public sealed class MainForm : Form
 
         top.Controls.Add(new Label { Text = "节点", AutoSize = true, Padding = new Padding(0, 8, 0, 0) });
         top.Controls.Add(_nodeCombo);
-        top.Controls.Add(new Label { Text = "游戏", AutoSize = true, Padding = new Padding(0, 8, 0, 0) });
-        top.Controls.Add(_processCombo);
         top.Controls.Add(new Label { Text = "模式", AutoSize = true, Padding = new Padding(0, 8, 0, 0) });
         top.Controls.Add(_profileCombo);
         top.Controls.Add(btnApply);
@@ -344,8 +343,7 @@ public sealed class MainForm : Form
         var btnEngineStop = new Button { Text = "停止接管引擎", AutoSize = true };
         var btnEngineRestart = new Button { Text = "重启接管引擎", AutoSize = true };
         var btnNetRepair = new Button { Text = "一键网络修复", AutoSize = true };
-        var btnPickGame = new Button { Text = "选择游戏EXE", AutoSize = true };
-        var btnPickLauncher = new Button { Text = "选择启动器EXE", AutoSize = true };
+        var btnPickFolder = new Button { Text = "新增文件夹", AutoSize = true };
         var chkTunMode = new CheckBox { Text = "TUN模式(需虚拟网卡)", AutoSize = true, Checked = true, Visible = false };
         var chkFullTunnelValidation = new CheckBox { Text = "全隧道验证模式", AutoSize = true, Checked = false, Visible = false };
         var chkAdvanced = new CheckBox { Text = "高级模式", AutoSize = true, Checked = false };
@@ -353,8 +351,7 @@ public sealed class MainForm : Form
         btnEngineStop.Click += (_, _) => StopEngine();
         btnEngineRestart.Click += async (_, _) => await RestartEngineAsync();
         btnNetRepair.Click += async (_, _) => await RepairNetworkAsync();
-        btnPickGame.Click += (_, _) => PickExeInto(_gameProcessPaths);
-        btnPickLauncher.Click += (_, _) => PickExeInto(_launcherProcessPaths);
+        btnPickFolder.Click += (_, _) => PickFolderInto(_gameFolderPaths);
         chkTunMode.CheckedChanged += (_, _) => _useTunMode = chkTunMode.Checked;
         chkFullTunnelValidation.CheckedChanged += (_, _) => _fullTunnelValidationMode = chkFullTunnelValidation.Checked;
         chkAdvanced.CheckedChanged += (_, _) =>
@@ -375,12 +372,9 @@ public sealed class MainForm : Form
         cfgPanel.Controls.Add(_hy2Sni);
         cfgPanel.Controls.Add(_hy2ObfsType);
         cfgPanel.Controls.Add(_hy2ObfsPassword);
-        cfgPanel.Controls.Add(new Label { Text = "游戏路径", AutoSize = true, Padding = new Padding(0, 8, 0, 0) });
-        cfgPanel.Controls.Add(_gameProcessPaths);
-        cfgPanel.Controls.Add(btnPickGame);
-        cfgPanel.Controls.Add(new Label { Text = "启动器路径", AutoSize = true, Padding = new Padding(0, 8, 0, 0) });
-        cfgPanel.Controls.Add(_launcherProcessPaths);
-        cfgPanel.Controls.Add(btnPickLauncher);
+        cfgPanel.Controls.Add(new Label { Text = "文件夹模式", AutoSize = true, Padding = new Padding(0, 8, 0, 0) });
+        cfgPanel.Controls.Add(_gameFolderPaths);
+        cfgPanel.Controls.Add(btnPickFolder);
         cfgPanel.Controls.Add(chkAdvanced);
         cfgPanel.Controls.Add(chkTunMode);
         cfgPanel.Controls.Add(chkFullTunnelValidation);
@@ -471,9 +465,9 @@ public sealed class MainForm : Form
         var btnGameAdd2 = new Button { Text = "新增游戏", AutoSize = true };
         var btnGameEdit2 = new Button { Text = "编辑游戏", AutoSize = true };
         var btnGameDel2 = new Button { Text = "删除游戏", AutoSize = true };
-        btnGameAdd2.Click += (_, _) => PickExeInto(_gameProcessPaths);
-        btnGameEdit2.Click += (_, _) => PickExeInto(_gameProcessPaths);
-        btnGameDel2.Click += (_, _) => { _gameProcessPaths.Text = ""; RefreshGameUi(); SaveSettings(); };
+        btnGameAdd2.Click += (_, _) => PickFolderInto(_gameFolderPaths);
+        btnGameEdit2.Click += (_, _) => PickFolderInto(_gameFolderPaths);
+        btnGameDel2.Click += (_, _) => { _gameFolderPaths.Text = ""; RefreshGameUi(); SaveSettings(); };
         gameBtnBar.Controls.Add(btnGameAdd2);
         gameBtnBar.Controls.Add(btnGameEdit2);
         gameBtnBar.Controls.Add(btnGameDel2);
@@ -566,7 +560,7 @@ public sealed class MainForm : Form
             _hy2Sni.Text = string.IsNullOrWhiteSpace(settings.Hy2Sni) ? "www.bing.com" : settings.Hy2Sni!;
             _hy2ObfsType.Text = settings.Hy2ObfsType ?? "";
             _hy2ObfsPassword.Text = settings.Hy2ObfsPassword ?? "";
-            _gameProcessPaths.Text = settings.GameProcessPaths ?? "";
+            _gameFolderPaths.Text = settings.GameProcessPaths ?? "";
             _launcherProcessPaths.Text = settings.LauncherProcessPaths ?? "";
             _nodes.Clear();
             if (settings.Nodes != null) _nodes.AddRange(settings.Nodes.Where(n => !string.IsNullOrWhiteSpace(n.DisplayName) && !string.IsNullOrWhiteSpace(n.Server)));
@@ -611,11 +605,8 @@ public sealed class MainForm : Form
                 .OrderBy(x => x, StringComparer.OrdinalIgnoreCase)
                 .ToList();
 
-            _processCombo.Items.Clear();
-            foreach (var p in list) _processCombo.Items.Add(p);
-            if (_processCombo.Items.Count > 0) _processCombo.SelectedIndex = 0;
-
-            Log($"进程数量: {list.Count}");
+            // 顶部已移除游戏进程下拉，这里仅保留扫描日志
+            Log($"系统进程数量: {list.Count}");
         }
         catch (Exception ex)
         {
@@ -633,13 +624,14 @@ public sealed class MainForm : Form
 
         ApplySelectedNodeToInputs();
 
-        var proc = _processCombo.SelectedItem?.ToString()?.Trim();
-        if (string.IsNullOrWhiteSpace(proc))
+        var exes = ExpandExePathsFromFolders(_gameFolderPaths.Text);
+        if (exes.Count == 0)
         {
-            Log("请先选择进程");
+            MessageBox.Show("请先新增一个包含 .exe 的文件夹。", "开始接管", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             return;
         }
 
+        var proc = Path.GetFileName(exes[0]);
         _activeProcess = proc;
         Log($"目标进程: {_activeProcess}");
         Log($"当前节点: {_nodeCombo.Text}");
@@ -680,6 +672,41 @@ public sealed class MainForm : Form
             _status.Text = $"状态：接管策略已启用（{_activeProcess}）";
             await VerifyTakeoverAsync();
         }
+    }
+
+    private void PickFolderInto(TextBox target)
+    {
+        using var fbd = new FolderBrowserDialog
+        {
+            Description = "选择包含 .exe 的文件夹"
+        };
+        if (fbd.ShowDialog() == DialogResult.OK)
+        {
+            var existing = (target.Text ?? "").Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
+            var folder = fbd.SelectedPath;
+            if (!existing.Any(x => x.Equals(folder, StringComparison.OrdinalIgnoreCase)))
+                existing.Add(folder);
+            target.Text = string.Join(';', existing);
+            RefreshGameUi();
+            SaveSettings();
+        }
+    }
+
+    private List<string> ExpandExePathsFromFolders(string foldersText)
+    {
+        var result = new List<string>();
+        var folders = (foldersText ?? "").Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        foreach (var f in folders)
+        {
+            try
+            {
+                if (!Directory.Exists(f)) continue;
+                var exes = Directory.GetFiles(f, "*.exe", SearchOption.TopDirectoryOnly);
+                result.AddRange(exes);
+            }
+            catch { }
+        }
+        return result.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
     }
 
     private void PickExeInto(TextBox target)
@@ -1371,9 +1398,13 @@ public sealed class MainForm : Form
     private void RefreshGameUi()
     {
         _gameList.Items.Clear();
-        var gps = (_gameProcessPaths.Text ?? "").Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        foreach (var g in gps)
-            _gameList.Items.Add(Path.GetFileName(g));
+        var folders = (_gameFolderPaths.Text ?? "").Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        foreach (var f in folders)
+        {
+            var count = 0;
+            try { if (Directory.Exists(f)) count = Directory.GetFiles(f, "*.exe", SearchOption.TopDirectoryOnly).Length; } catch { }
+            _gameList.Items.Add($"{Path.GetFileName(f)}  ({count} 个EXE)");
+        }
     }
 
     private void RefreshNodeUi()
@@ -1734,7 +1765,7 @@ public sealed class MainForm : Form
         var wintunPath = Path.Combine(GetDataDir(), "wintun.dll");
         var wintunState = File.Exists(wintunPath) ? "Ready" : "Missing";
         var nodeName = _nodeCombo.SelectedItem?.ToString() ?? (_nodeCombo.Text ?? "-");
-        var games = (_gameProcessPaths.Text ?? "").Trim();
+        var games = (_gameFolderPaths.Text ?? "").Trim();
         var tail = GetLogTail(8).Replace("\r", " ").Replace("\n", " | ");
 
         _diagStatus.Text = $"诊断: 状态={EngineStateZh(_engineState)}/{EngineErrorZh(_lastEngineError)}, Wintun={wintunState}, SB={SingBoxVersion}, 节点={nodeName}, 模式={_accelerationMode}";
@@ -1919,19 +1950,11 @@ public sealed class MainForm : Form
         var obfsType = (_hy2ObfsType.Text ?? "").Trim();
         var obfsPassword = (_hy2ObfsPassword.Text ?? "").Trim();
 
-        var gamePaths = (_gameProcessPaths.Text ?? "")
-            .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToList();
-
-        var launcherPaths = (_launcherProcessPaths.Text ?? "")
-            .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToList();
+        var gamePaths = ExpandExePathsFromFolders(_gameFolderPaths.Text);
+        var launcherPaths = new List<string>();
 
         if (gamePaths.Count == 0)
         {
-            // fallback: 至少用 process_name
             gamePaths.Add(processExe);
         }
 
@@ -2447,7 +2470,7 @@ public sealed class MainForm : Form
                 Hy2Token = (_hy2Token.Text ?? "").Trim(),
                 Hy2Port = int.TryParse((_hy2Port.Text ?? "8443").Trim(), out var n) ? n : 8443,
                 LastSeenVersion = current.LastSeenVersion,
-                GameProcessPaths = (_gameProcessPaths.Text ?? "").Trim(),
+                GameProcessPaths = (_gameFolderPaths.Text ?? "").Trim(),
                 LauncherProcessPaths = (_launcherProcessPaths.Text ?? "").Trim(),
                 Hy2Sni = (_hy2Sni.Text ?? "").Trim(),
                 Hy2ObfsType = (_hy2ObfsType.Text ?? "").Trim(),
