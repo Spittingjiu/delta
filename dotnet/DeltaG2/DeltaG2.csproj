@@ -20,5 +20,9 @@
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
       <Link>sing-box.exe</Link>
     </Content>
+    <Content Include="..\..\wintun.dll" Condition="Exists('..\..\wintun.dll')">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Link>wintun.dll</Link>
+    </Content>
   </ItemGroup>
 </Project>
