@@ -27,7 +27,7 @@ internal static class Program
 
 public sealed class MainForm : Form
 {
-    private const string Version = "G6.43";
+    private const string Version = "G6.44";
     private const string SingBoxVersion = "1.13.3";
     private const string UpdateManifestUrl = "https://delta.zzao.de/latest.json";
     private const string DefaultExeUrlTemplate = "https://delta.zzao.de/releases/Delta v{0}.exe";
@@ -114,8 +114,8 @@ public sealed class MainForm : Form
     private readonly Button _btnCopyLog = new() { Text = "复制日志", AutoSize = true };
 
 
-    private readonly TextBox _hy2Ip = new() { Width = 170, Text = "178.22.26.114" };
-    private readonly TextBox _hy2Port = new() { Width = 70, Text = "8443" };
+    private readonly TextBox _hy2Ip = new() { Width = 170, Text = "178.22.26.114", Visible = false };
+    private readonly TextBox _hy2Port = new() { Width = 70, Text = "8443", Visible = false };
     private readonly TextBox _hy2Token = new() { Width = 220, Visible = false };
     private readonly TextBox _hy2Sni = new() { Width = 160, Text = "www.bing.com", Visible = false };
     private readonly TextBox _hy2ObfsType = new() { Width = 110, PlaceholderText = "混淆类型", Visible = false };
@@ -314,6 +314,11 @@ public sealed class MainForm : Form
         btnStability.Click += async (_, _) => await RunStabilityCyclesAsync(5);
         btnExportLogs.Click += (_, _) => ExportLogs();
         _nodeCombo.SelectedIndexChanged += (_, _) => ApplySelectedNodeToInputs();
+        _nodeList.SelectedIndexChanged += (_, _) =>
+        {
+            if (_nodeList.SelectedIndex >= 0 && _nodeList.SelectedIndex < _nodeCombo.Items.Count)
+                _nodeCombo.SelectedIndex = _nodeList.SelectedIndex;
+        };
         _profileCombo.SelectedIndexChanged += (_, _) => ApplySelectedProfileTemplate();
         _btnCheckUpdate.Click += async (_, _) => await CheckUpdateAsync(true);
         chkVerbose.CheckedChanged += (_, _) => _verboseLogs = chkVerbose.Checked;
@@ -364,15 +369,11 @@ public sealed class MainForm : Form
             chkFullTunnelValidation.Visible = _advancedMode;
         };
 
-        cfgPanel.Controls.Add(new Label { Text = "HY2 IP", AutoSize = true, Padding = new Padding(0, 8, 0, 0) });
+        cfgPanel.Controls.Add(new Label { Text = "节点参数来源：当前节点（IP/端口/令牌）", AutoSize = true, Padding = new Padding(0, 8, 0, 0) });
         cfgPanel.Controls.Add(_hy2Ip);
-        cfgPanel.Controls.Add(new Label { Text = "端口", AutoSize = true, Padding = new Padding(0, 8, 0, 0) });
         cfgPanel.Controls.Add(_hy2Port);
-        cfgPanel.Controls.Add(new Label { Text = "令牌", AutoSize = true, Padding = new Padding(0, 8, 0, 0), Visible = false });
         cfgPanel.Controls.Add(_hy2Token);
-        cfgPanel.Controls.Add(new Label { Text = "SNI", AutoSize = true, Padding = new Padding(0, 8, 0, 0), Visible = false });
         cfgPanel.Controls.Add(_hy2Sni);
-        cfgPanel.Controls.Add(new Label { Text = "混淆", AutoSize = true, Padding = new Padding(0, 8, 0, 0), Visible = false });
         cfgPanel.Controls.Add(_hy2ObfsType);
         cfgPanel.Controls.Add(_hy2ObfsPassword);
         cfgPanel.Controls.Add(new Label { Text = "游戏路径", AutoSize = true, Padding = new Padding(0, 8, 0, 0) });
@@ -442,12 +443,15 @@ public sealed class MainForm : Form
         nodeLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         nodeLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         var nodeBtnBar = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true };
+        var btnNodeSetCurrent = new Button { Text = "设为当前节点", AutoSize = true };
         var btnNodeAdd2 = new Button { Text = "新增节点", AutoSize = true };
         var btnNodeEdit2 = new Button { Text = "编辑节点", AutoSize = true };
         var btnNodeDel2 = new Button { Text = "删除节点", AutoSize = true };
+        btnNodeSetCurrent.Click += (_, _) => SetCurrentNodeFromList();
         btnNodeAdd2.Click += (_, _) => UpsertCurrentNode();
         btnNodeEdit2.Click += (_, _) => UpsertCurrentNode();
         btnNodeDel2.Click += (_, _) => RemoveCurrentNode();
+        nodeBtnBar.Controls.Add(btnNodeSetCurrent);
         nodeBtnBar.Controls.Add(btnNodeAdd2);
         nodeBtnBar.Controls.Add(btnNodeEdit2);
         nodeBtnBar.Controls.Add(btnNodeDel2);
@@ -622,6 +626,14 @@ public sealed class MainForm : Form
 
     private async Task ApplyTakeoverAsync()
     {
+        if (_nodes.Count == 0 || _nodeCombo.SelectedIndex < 0)
+        {
+            MessageBox.Show("当前没有可用节点，请先导入并设为当前节点。", "开始接管", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
+        ApplySelectedNodeToInputs();
+
         var proc = _processCombo.SelectedItem?.ToString()?.Trim();
         if (string.IsNullOrWhiteSpace(proc))
         {
@@ -1335,6 +1347,21 @@ public sealed class MainForm : Form
             ObfsType = _hy2ObfsType.Text.Trim(),
             ObfsPassword = _hy2ObfsPassword.Text.Trim()
         });
+    }
+
+    private void SetCurrentNodeFromList()
+    {
+        var idx = _nodeList.SelectedIndex >= 0 ? _nodeList.SelectedIndex : _nodeCombo.SelectedIndex;
+        if (idx < 0 || idx >= _nodes.Count)
+        {
+            MessageBox.Show("请先在节点列表里选中一个节点。", "节点管理", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        _nodeCombo.SelectedIndex = idx;
+        ApplySelectedNodeToInputs();
+        SaveSettings();
+        Log($"当前节点已切换：{_nodes[idx].DisplayName}");
     }
 
     private void RefreshGameUi()
