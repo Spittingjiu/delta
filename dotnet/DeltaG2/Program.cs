@@ -27,7 +27,7 @@ internal static class Program
 
 public sealed class MainForm : Form
 {
-    private const string Version = "G6.38";
+    private const string Version = "G6.40";
     private const string SingBoxVersion = "1.13.3";
     private const string UpdateManifestUrl = "https://delta.zzao.de/latest.json";
     private const string DefaultExeUrlTemplate = "https://delta.zzao.de/releases/Delta v{0}.exe";
@@ -90,19 +90,34 @@ public sealed class MainForm : Form
     private readonly Label _engineStatus = new() { AutoSize = true, Text = "引擎：未连接" };
     private readonly Label _verifyStatus = new() { AutoSize = true, Text = "验证：未执行" };
     private readonly Label _updateStatus = new() { AutoSize = true, Text = "更新：检查中" };
-    private readonly Label _routeStatus = new() { AutoSize = true, Text = "路由：未生成" };
-    private readonly Label _diagStatus = new() { AutoSize = true, Text = "诊断：未初始化" };
+    private readonly Label _routeStatus = new() { AutoSize = true, Text = "路由：-" };
+    private readonly Label _diagStatus = new() { AutoSize = true, Text = "诊断：-" };
     private readonly Label _nodeHealthStatus = new() { AutoSize = true, Text = "节点健康：未测试" };
     private readonly Label _ipDirect = new() { AutoSize = true, Text = "直连IP：-" };
     private readonly Label _ipProxy = new() { AutoSize = true, Text = "代理IP：-" };
+    private readonly Label _quickSummary = new() { AutoSize = true, Text = "[未运行] | 节点:- | 模式:稳定 | 游戏:- | 路由:直连" };
+    private readonly ListBox _nodeList = new() { Dock = DockStyle.Fill };
+    private readonly ListBox _gameList = new() { Dock = DockStyle.Fill };
+    private readonly Label _cardEngine = new() { AutoSize = true, Text = "引擎状态：-" };
+    private readonly Label _cardNode = new() { AutoSize = true, Text = "当前节点：-" };
+    private readonly Label _cardMode = new() { AutoSize = true, Text = "当前模式：-" };
+    private readonly Label _cardTun = new() { AutoSize = true, Text = "TUN状态：-" };
+    private readonly Label _cardMatched = new() { AutoSize = true, Text = "命中进程：-" };
+    private readonly Label _cardRoute = new() { AutoSize = true, Text = "当前路由：-" };
+    private readonly TabControl _logsTabs = new() { Dock = DockStyle.Fill };
+    private readonly TextBox _logEngineView = new() { Multiline = true, ReadOnly = true, Dock = DockStyle.Fill, ScrollBars = ScrollBars.Vertical, Font = new Font("Consolas", 10f) };
+    private readonly TextBox _logCoreView = new() { Multiline = true, ReadOnly = true, Dock = DockStyle.Fill, ScrollBars = ScrollBars.Vertical, Font = new Font("Consolas", 10f) };
+    private readonly TextBox _logNetView = new() { Multiline = true, ReadOnly = true, Dock = DockStyle.Fill, ScrollBars = ScrollBars.Vertical, Font = new Font("Consolas", 10f) };
+    private readonly ComboBox _logLevelFilter = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 120 };
+    private readonly Button _btnCopyLog = new() { Text = "复制日志", AutoSize = true };
 
 
     private readonly TextBox _hy2Ip = new() { Width = 170, Text = "178.22.26.114" };
     private readonly TextBox _hy2Port = new() { Width = 70, Text = "8443" };
-    private readonly TextBox _hy2Token = new() { Width = 220 };
-    private readonly TextBox _hy2Sni = new() { Width = 160, Text = "www.bing.com" };
-    private readonly TextBox _hy2ObfsType = new() { Width = 110, PlaceholderText = "obfs type" };
-    private readonly TextBox _hy2ObfsPassword = new() { Width = 140, PlaceholderText = "obfs pass" };
+    private readonly TextBox _hy2Token = new() { Width = 220, Visible = false };
+    private readonly TextBox _hy2Sni = new() { Width = 160, Text = "www.bing.com", Visible = false };
+    private readonly TextBox _hy2ObfsType = new() { Width = 110, PlaceholderText = "混淆类型", Visible = false };
+    private readonly TextBox _hy2ObfsPassword = new() { Width = 140, PlaceholderText = "混淆密码", Visible = false };
     private readonly TextBox _gameProcessPaths = new() { Width = 360, PlaceholderText = "游戏EXE全路径，支持多个(;分隔)" };
     private readonly TextBox _launcherProcessPaths = new() { Width = 360, PlaceholderText = "启动器EXE全路径，可选，支持多个(;)" };
 
@@ -130,6 +145,7 @@ public sealed class MainForm : Form
     private bool _verboseLogs = false;
     private bool _useTunMode = true;
     private bool _fullTunnelValidationMode = false;
+    private bool _advancedMode = false;
     private EngineState _engineState = EngineState.Idle;
     private EngineError _lastEngineError = EngineError.None;
     private int _engineRunId = 0;
@@ -144,30 +160,121 @@ public sealed class MainForm : Form
     private readonly List<LogEntry> _recentCoreLogs = new();
     private readonly List<LogEntry> _recentProbeLogs = new();
 
+    private static string EngineStateZh(EngineState s) => s switch
+    {
+        EngineState.Idle => "空闲",
+        EngineState.CheckingAdmin => "检查管理员权限",
+        EngineState.PreparingWintun => "准备Wintun",
+        EngineState.PreparingCore => "准备核心",
+        EngineState.WritingConfig => "写入配置",
+        EngineState.StartingCore => "启动核心",
+        EngineState.WaitingTunReady => "等待TUN就绪",
+        EngineState.Running => "运行中",
+        EngineState.Failed => "失败",
+        EngineState.Stopping => "停止中",
+        _ => s.ToString()
+    };
+
+    private static string AccelerationModeZh(AccelerationMode m) => m switch
+    {
+        AccelerationMode.Stable => "稳定",
+        AccelerationMode.Balanced => "平衡",
+        AccelerationMode.Performance => "性能",
+        _ => "稳定"
+    };
+
+    private static string EngineErrorZh(EngineError e) => e switch
+    {
+        EngineError.None => "无",
+        EngineError.TunAdminRequired => "需要管理员权限",
+        EngineError.TunDownloadFailed => "Wintun下载失败",
+        EngineError.TunHashMismatch => "Wintun校验失败",
+        EngineError.TunDllCopyFailed => "Wintun DLL拷贝失败",
+        EngineError.CoreStartFailed => "核心启动失败",
+        EngineError.TunCreateFailed => "TUN创建失败",
+        EngineError.TunCreateTimeout => "TUN创建超时",
+        EngineError.HysteriaHandshakeFailed => "HY2握手失败",
+        EngineError.NodeUnreachable => "节点不可达",
+        EngineError.RouteRuleNotMatched => "未命中路由规则",
+        EngineError.ConfigWriteFailed => "配置写入失败",
+        EngineError.CoreBinaryMissing => "核心文件缺失",
+        EngineError.CoreCrashed => "核心崩溃",
+        EngineError.NodeProbeFailed => "节点探测失败",
+        _ => "未知错误"
+    };
+
     private void SetEngineState(EngineState state)
     {
         _engineState = state;
-        _engineStatus.Text = "引擎状态：" + state;
-        LogEngine($"[STATE] {state}");
+        _engineStatus.Text = "引擎状态：" + EngineStateZh(state);
+        LogEngine($"[状态] {EngineStateZh(state)}");
     }
 
     private void FailEngine(EngineError code, string shortMessage, string? raw = null)
     {
         _engineState = EngineState.Failed;
         _lastEngineError = code;
-        _engineStatus.Text = "引擎状态：Failed";
-        LogEngine($"[ERR:{code}] {shortMessage}");
+        _engineStatus.Text = "引擎状态：失败";
+        LogEx("ERROR", "engine", $"[错误:{EngineErrorZh(code)}] {shortMessage}", _recentEngineLogs);
         if (!string.IsNullOrWhiteSpace(raw))
-            LogEngine("[RAW] " + raw.Replace("\r", " ").Replace("\n", " | "));
+            LogEx("ERROR", "engine", "[RAW] " + raw.Replace("\r", " ").Replace("\n", " | "), _recentEngineLogs);
     }
 
     public MainForm()
     {
         Text = "Delta " + Version;
         try { Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch { }
-        Width = 1120;
+        Width = 1320;
         Height = 780;
         StartPosition = FormStartPosition.CenterScreen;
+
+        var menu = new MenuStrip();
+
+        var fileMenu = new ToolStripMenuItem("文件");
+        var miImportNodes = new ToolStripMenuItem("导入节点");
+        var miExportNodes = new ToolStripMenuItem("导出节点");
+        var miExit = new ToolStripMenuItem("退出");
+        miImportNodes.Click += (_, _) => ImportNodes();
+        miExportNodes.Click += (_, _) => ExportNodes();
+        miExit.Click += (_, _) => Close();
+        fileMenu.DropDownItems.AddRange(new ToolStripItem[] { miImportNodes, miExportNodes, new ToolStripSeparator(), miExit });
+
+        var engineMenu = new ToolStripMenuItem("引擎");
+        var miStart = new ToolStripMenuItem("开始加速");
+        var miStop = new ToolStripMenuItem("停止");
+        var miRestart = new ToolStripMenuItem("重启核心");
+        miStart.Click += async (_, _) => await ApplyTakeoverAsync();
+        miStop.Click += (_, _) => StopEngine();
+        miRestart.Click += async (_, _) => await RestartEngineAsync();
+        engineMenu.DropDownItems.AddRange(new ToolStripItem[] { miStart, miStop, miRestart });
+
+        var toolsMenu = new ToolStripMenuItem("工具");
+        var miNetRepair = new ToolStripMenuItem("网络修复");
+        var miFlushDns = new ToolStripMenuItem("刷新DNS");
+        var miResetAdapter = new ToolStripMenuItem("重置适配器");
+        var miTestNode = new ToolStripMenuItem("测试节点");
+        miNetRepair.Click += async (_, _) => await RepairNetworkAsync();
+        miFlushDns.Click += async (_, _) => await RunHiddenAsync("ipconfig", "/flushdns");
+        miResetAdapter.Click += async (_, _) => await HardCleanupBeforeStartAsync();
+        miTestNode.Click += async (_, _) => await TestCurrentNodeAsync();
+        toolsMenu.DropDownItems.AddRange(new ToolStripItem[] { miNetRepair, miFlushDns, miResetAdapter, miTestNode });
+
+        var viewMenu = new ToolStripMenuItem("视图");
+        var miToggleVerbose = new ToolStripMenuItem("切换详细日志") { CheckOnClick = true, Checked = _verboseLogs };
+        var miOpenLog = new ToolStripMenuItem("打开日志窗口");
+        miToggleVerbose.CheckedChanged += (_, _) => _verboseLogs = miToggleVerbose.Checked;
+        miOpenLog.Click += (_, _) => MessageBox.Show(_log.TextLength == 0 ? "暂无日志" : _log.Text, "日志窗口", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        viewMenu.DropDownItems.AddRange(new ToolStripItem[] { miToggleVerbose, miOpenLog });
+
+        var helpMenu = new ToolStripMenuItem("帮助");
+        var miAbout = new ToolStripMenuItem("关于");
+        var miCheckUpdate = new ToolStripMenuItem("检查更新");
+        miAbout.Click += (_, _) => MessageBox.Show($"Delta {Version}\n游戏加速器", "关于", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        miCheckUpdate.Click += async (_, _) => await CheckUpdateAsync(true);
+        helpMenu.DropDownItems.AddRange(new ToolStripItem[] { miAbout, miCheckUpdate });
+
+        menu.Items.AddRange(new ToolStripItem[] { fileMenu, engineMenu, toolsMenu, viewMenu, helpMenu });
+        MainMenuStrip = menu;
 
         var top = new FlowLayoutPanel
         {
@@ -208,25 +315,14 @@ public sealed class MainForm : Form
         chkVerbose.CheckedChanged += (_, _) => _verboseLogs = chkVerbose.Checked;
         _btnUpdate.Click += async (_, _) => await UpdateToLatestAsync();
 
-        top.Controls.Add(btnRefresh);
-        top.Controls.Add(_processCombo);
         top.Controls.Add(new Label { Text = "节点", AutoSize = true, Padding = new Padding(0, 8, 0, 0) });
         top.Controls.Add(_nodeCombo);
-        top.Controls.Add(btnNodeUpsert);
-        top.Controls.Add(btnNodeRemove);
-        top.Controls.Add(btnNodeTest);
-        top.Controls.Add(btnNodeImport);
-        top.Controls.Add(btnNodeExport);
-        top.Controls.Add(btnStability);
-        top.Controls.Add(btnExportLogs);
-        top.Controls.Add(new Label { Text = "模板", AutoSize = true, Padding = new Padding(0, 8, 0, 0) });
+        top.Controls.Add(new Label { Text = "游戏", AutoSize = true, Padding = new Padding(0, 8, 0, 0) });
+        top.Controls.Add(_processCombo);
+        top.Controls.Add(new Label { Text = "模式", AutoSize = true, Padding = new Padding(0, 8, 0, 0) });
         top.Controls.Add(_profileCombo);
         top.Controls.Add(btnApply);
-        top.Controls.Add(btnVerify);
         top.Controls.Add(btnRollback);
-        top.Controls.Add(_btnCheckUpdate);
-        top.Controls.Add(_btnUpdate);
-        top.Controls.Add(chkVerbose);
 
         var cfgPanel = new FlowLayoutPanel
         {
@@ -242,8 +338,9 @@ public sealed class MainForm : Form
         var btnNetRepair = new Button { Text = "一键网络修复", AutoSize = true };
         var btnPickGame = new Button { Text = "选择游戏EXE", AutoSize = true };
         var btnPickLauncher = new Button { Text = "选择启动器EXE", AutoSize = true };
-        var chkTunMode = new CheckBox { Text = "TUN模式(需虚拟网卡)", AutoSize = true, Checked = true };
-        var chkFullTunnelValidation = new CheckBox { Text = "全隧道验证模式", AutoSize = true, Checked = false };
+        var chkTunMode = new CheckBox { Text = "TUN模式(需虚拟网卡)", AutoSize = true, Checked = true, Visible = false };
+        var chkFullTunnelValidation = new CheckBox { Text = "全隧道验证模式", AutoSize = true, Checked = false, Visible = false };
+        var chkAdvanced = new CheckBox { Text = "高级模式", AutoSize = true, Checked = false };
 
         btnEngineStop.Click += (_, _) => StopEngine();
         btnEngineRestart.Click += async (_, _) => await RestartEngineAsync();
@@ -252,16 +349,26 @@ public sealed class MainForm : Form
         btnPickLauncher.Click += (_, _) => PickExeInto(_launcherProcessPaths);
         chkTunMode.CheckedChanged += (_, _) => _useTunMode = chkTunMode.Checked;
         chkFullTunnelValidation.CheckedChanged += (_, _) => _fullTunnelValidationMode = chkFullTunnelValidation.Checked;
+        chkAdvanced.CheckedChanged += (_, _) =>
+        {
+            _advancedMode = chkAdvanced.Checked;
+            _hy2Token.Visible = _advancedMode;
+            _hy2Sni.Visible = _advancedMode;
+            _hy2ObfsType.Visible = _advancedMode;
+            _hy2ObfsPassword.Visible = _advancedMode;
+            chkTunMode.Visible = _advancedMode;
+            chkFullTunnelValidation.Visible = _advancedMode;
+        };
 
         cfgPanel.Controls.Add(new Label { Text = "HY2 IP", AutoSize = true, Padding = new Padding(0, 8, 0, 0) });
         cfgPanel.Controls.Add(_hy2Ip);
         cfgPanel.Controls.Add(new Label { Text = "端口", AutoSize = true, Padding = new Padding(0, 8, 0, 0) });
         cfgPanel.Controls.Add(_hy2Port);
-        cfgPanel.Controls.Add(new Label { Text = "Token", AutoSize = true, Padding = new Padding(0, 8, 0, 0) });
+        cfgPanel.Controls.Add(new Label { Text = "令牌", AutoSize = true, Padding = new Padding(0, 8, 0, 0), Visible = false });
         cfgPanel.Controls.Add(_hy2Token);
-        cfgPanel.Controls.Add(new Label { Text = "SNI", AutoSize = true, Padding = new Padding(0, 8, 0, 0) });
+        cfgPanel.Controls.Add(new Label { Text = "SNI", AutoSize = true, Padding = new Padding(0, 8, 0, 0), Visible = false });
         cfgPanel.Controls.Add(_hy2Sni);
-        cfgPanel.Controls.Add(new Label { Text = "Obfs", AutoSize = true, Padding = new Padding(0, 8, 0, 0) });
+        cfgPanel.Controls.Add(new Label { Text = "混淆", AutoSize = true, Padding = new Padding(0, 8, 0, 0), Visible = false });
         cfgPanel.Controls.Add(_hy2ObfsType);
         cfgPanel.Controls.Add(_hy2ObfsPassword);
         cfgPanel.Controls.Add(new Label { Text = "游戏路径", AutoSize = true, Padding = new Padding(0, 8, 0, 0) });
@@ -270,6 +377,7 @@ public sealed class MainForm : Form
         cfgPanel.Controls.Add(new Label { Text = "启动器路径", AutoSize = true, Padding = new Padding(0, 8, 0, 0) });
         cfgPanel.Controls.Add(_launcherProcessPaths);
         cfgPanel.Controls.Add(btnPickLauncher);
+        cfgPanel.Controls.Add(chkAdvanced);
         cfgPanel.Controls.Add(chkTunMode);
         cfgPanel.Controls.Add(chkFullTunnelValidation);
         cfgPanel.Controls.Add(btnEngineStop);
@@ -284,6 +392,8 @@ public sealed class MainForm : Form
             WrapContents = false,
             Padding = new Padding(10, 4, 10, 2)
         };
+        statusPanel.Controls.Add(_quickSummary);
+        statusPanel.Controls.Add(new Label { Text = "   " });
         statusPanel.Controls.Add(_status);
         statusPanel.Controls.Add(new Label { Text = "   " });
         statusPanel.Controls.Add(_engineStatus);
@@ -310,11 +420,126 @@ public sealed class MainForm : Form
         verifyPanel.Controls.Add(new Label { Text = "   " });
         verifyPanel.Controls.Add(_ipProxy);
 
-        Controls.Add(_log);
+        var leftPanel = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 1,
+            RowCount = 2,
+            Padding = new Padding(8)
+        };
+        leftPanel.RowStyles.Add(new RowStyle(SizeType.Percent, 52));
+        leftPanel.RowStyles.Add(new RowStyle(SizeType.Percent, 48));
+
+        var nodePanel = new GroupBox { Text = "节点面板", Dock = DockStyle.Fill, Padding = new Padding(8) };
+        var nodeLayout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3 };
+        nodeLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        nodeLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        nodeLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        var nodeBtnBar = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true };
+        var btnNodeAdd2 = new Button { Text = "新增节点", AutoSize = true };
+        var btnNodeEdit2 = new Button { Text = "编辑节点", AutoSize = true };
+        var btnNodeDel2 = new Button { Text = "删除节点", AutoSize = true };
+        btnNodeAdd2.Click += (_, _) => UpsertCurrentNode();
+        btnNodeEdit2.Click += (_, _) => UpsertCurrentNode();
+        btnNodeDel2.Click += (_, _) => RemoveCurrentNode();
+        nodeBtnBar.Controls.Add(btnNodeAdd2);
+        nodeBtnBar.Controls.Add(btnNodeEdit2);
+        nodeBtnBar.Controls.Add(btnNodeDel2);
+        var nodeStat = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true };
+        nodeStat.Controls.Add(new Label { Text = "Ping：见日志" });
+        nodeStat.Controls.Add(new Label { Text = "   状态：在线/离线见节点健康" });
+        nodeStat.Controls.Add(new Label { Text = "   质量：快/普通/差" });
+        nodeLayout.Controls.Add(_nodeList, 0, 0);
+        nodeLayout.Controls.Add(nodeBtnBar, 0, 1);
+        nodeLayout.Controls.Add(nodeStat, 0, 2);
+        nodePanel.Controls.Add(nodeLayout);
+
+        var gamePanel = new GroupBox { Text = "游戏面板", Dock = DockStyle.Fill, Padding = new Padding(8) };
+        var gameLayout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2 };
+        gameLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        gameLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        var gameBtnBar = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true };
+        var btnGameAdd2 = new Button { Text = "新增游戏", AutoSize = true };
+        var btnGameEdit2 = new Button { Text = "编辑游戏", AutoSize = true };
+        var btnGameDel2 = new Button { Text = "删除游戏", AutoSize = true };
+        btnGameAdd2.Click += (_, _) => PickExeInto(_gameProcessPaths);
+        btnGameEdit2.Click += (_, _) => PickExeInto(_gameProcessPaths);
+        btnGameDel2.Click += (_, _) => { _gameProcessPaths.Text = ""; RefreshGameUi(); SaveSettings(); };
+        gameBtnBar.Controls.Add(btnGameAdd2);
+        gameBtnBar.Controls.Add(btnGameEdit2);
+        gameBtnBar.Controls.Add(btnGameDel2);
+        gameLayout.Controls.Add(_gameList, 0, 0);
+        gameLayout.Controls.Add(gameBtnBar, 0, 1);
+        gamePanel.Controls.Add(gameLayout);
+
+        leftPanel.Controls.Add(nodePanel, 0, 0);
+        leftPanel.Controls.Add(gamePanel, 0, 1);
+
+        var rightPanel = new GroupBox { Text = "状态面板", Dock = DockStyle.Fill, Padding = new Padding(8) };
+        var rightFlow = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoScroll = true };
+        rightFlow.Controls.Add(_cardEngine);
+        rightFlow.Controls.Add(_cardNode);
+        rightFlow.Controls.Add(_cardMode);
+        rightFlow.Controls.Add(_cardTun);
+        rightFlow.Controls.Add(_cardMatched);
+        rightFlow.Controls.Add(_cardRoute);
+        rightPanel.Controls.Add(rightFlow);
+
+        var centerSplit = new SplitContainer { Dock = DockStyle.Fill, Orientation = Orientation.Vertical, SplitterDistance = 620 };
+        centerSplit.Panel1.Controls.Add(leftPanel);
+        centerSplit.Panel2.Controls.Add(rightPanel);
+
+        var tabEngine = new TabPage("引擎日志");
+        var tabCore = new TabPage("核心日志");
+        var tabNet = new TabPage("网络日志");
+        tabEngine.Controls.Add(_logEngineView);
+        tabCore.Controls.Add(_logCoreView);
+        tabNet.Controls.Add(_logNetView);
+        _logsTabs.TabPages.Clear();
+        _logsTabs.TabPages.Add(tabEngine);
+        _logsTabs.TabPages.Add(tabCore);
+        _logsTabs.TabPages.Add(tabNet);
+
+        _logLevelFilter.Items.Clear();
+        _logLevelFilter.Items.AddRange(new object[] { "全部", "信息", "警告", "错误" });
+        _logLevelFilter.SelectedIndex = 0;
+        _logLevelFilter.SelectedIndexChanged += (_, _) => RefreshLogViews();
+        _btnCopyLog.Click += (_, _) =>
+        {
+            try
+            {
+                var t = _logsTabs.SelectedTab?.Text ?? "引擎日志";
+                var txt = t.Contains("核心") ? _logCoreView.Text : t.Contains("网络") ? _logNetView.Text : _logEngineView.Text;
+                if (!string.IsNullOrWhiteSpace(txt)) Clipboard.SetText(txt);
+                Log("已复制当前日志");
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("复制日志失败: " + ex.Message, "日志", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
+        };
+
+        var logToolBar = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 34, AutoSize = false, WrapContents = false, Padding = new Padding(6, 4, 6, 2) };
+        logToolBar.Controls.Add(new Label { Text = "级别过滤", AutoSize = true, Padding = new Padding(0, 8, 0, 0) });
+        logToolBar.Controls.Add(_logLevelFilter);
+        logToolBar.Controls.Add(_btnCopyLog);
+
+        var bottomPanel = new Panel { Dock = DockStyle.Fill };
+        bottomPanel.Controls.Add(_logsTabs);
+        bottomPanel.Controls.Add(logToolBar);
+        bottomPanel.Controls.Add(_log);
+        _log.Visible = false;
+
+        var verticalMain = new SplitContainer { Dock = DockStyle.Fill, Orientation = Orientation.Horizontal, SplitterDistance = 430 };
+        verticalMain.Panel1.Controls.Add(centerSplit);
+        verticalMain.Panel2.Controls.Add(bottomPanel);
+
+        Controls.Add(verticalMain);
         Controls.Add(verifyPanel);
         Controls.Add(statusPanel);
         Controls.Add(cfgPanel);
         Controls.Add(top);
+        Controls.Add(menu);
 
         FormClosing += (_, _) =>
         {
@@ -338,8 +563,9 @@ public sealed class MainForm : Form
             if (settings.Nodes != null) _nodes.AddRange(settings.Nodes.Where(n => !string.IsNullOrWhiteSpace(n.DisplayName) && !string.IsNullOrWhiteSpace(n.Server)));
             SeedDefaultNodeIfNeeded();
             RefreshNodeUi();
+            RefreshGameUi();
             _profileCombo.Items.Clear();
-            _profileCombo.Items.AddRange(new object[] { "Stable Mode", "Balanced Mode", "Performance Mode" });
+            _profileCombo.Items.AddRange(new object[] { "稳定模式", "平衡模式", "性能模式" });
             _profileCombo.SelectedIndex = 0;
 
             Log("Delta 版本: " + Version);
@@ -1105,12 +1331,24 @@ public sealed class MainForm : Form
         });
     }
 
+    private void RefreshGameUi()
+    {
+        _gameList.Items.Clear();
+        var gps = (_gameProcessPaths.Text ?? "").Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        foreach (var g in gps)
+            _gameList.Items.Add(Path.GetFileName(g));
+    }
+
     private void RefreshNodeUi()
     {
         var selected = _nodeCombo.SelectedItem?.ToString();
         _nodeCombo.Items.Clear();
+        _nodeList.Items.Clear();
         foreach (var n in _nodes)
+        {
             _nodeCombo.Items.Add(n.DisplayName);
+            _nodeList.Items.Add(n.DisplayName);
+        }
         if (_nodeCombo.Items.Count > 0)
         {
             var idx = 0;
@@ -1223,18 +1461,18 @@ public sealed class MainForm : Form
 
     private void ApplySelectedProfileTemplate()
     {
-        var tpl = _profileCombo.SelectedItem?.ToString() ?? "Stable Mode";
+        var tpl = _profileCombo.SelectedItem?.ToString() ?? "稳定模式";
         _hy2Sni.Text = string.IsNullOrWhiteSpace(_hy2Sni.Text) ? "www.bing.com" : _hy2Sni.Text;
 
         switch (tpl)
         {
-            case "Stable Mode":
+            case "稳定模式":
                 _accelerationMode = AccelerationMode.Stable;
                 break;
-            case "Balanced Mode":
+            case "平衡模式":
                 _accelerationMode = AccelerationMode.Balanced;
                 break;
-            case "Performance Mode":
+            case "性能模式":
                 _accelerationMode = AccelerationMode.Performance;
                 break;
             default:
@@ -1462,7 +1700,16 @@ public sealed class MainForm : Form
         var games = (_gameProcessPaths.Text ?? "").Trim();
         var tail = GetLogTail(8).Replace("\r", " ").Replace("\n", " | ");
 
-        _diagStatus.Text = $"诊断: S={_engineState}/{_lastEngineError}, Wintun={wintunState}, SB={SingBoxVersion}, Node={nodeName}, Mode={_accelerationMode}";
+        _diagStatus.Text = $"诊断: 状态={EngineStateZh(_engineState)}/{EngineErrorZh(_lastEngineError)}, Wintun={wintunState}, SB={SingBoxVersion}, 节点={nodeName}, 模式={_accelerationMode}";
+        var route = _fullTunnelValidationMode ? "Hy2" : "直连/命中走Hy2";
+        var matched = _lastEngineError == EngineError.RouteRuleNotMatched ? "否" : "是/待验证";
+        _quickSummary.Text = $"[{EngineStateZh(_engineState)}] | 节点:{nodeName} | 模式:{AccelerationModeZh(_accelerationMode)} | 游戏:{_activeProcess ?? "-"} | 路由:{route}";
+        _cardEngine.Text = $"引擎状态：{EngineStateZh(_engineState)}";
+        _cardNode.Text = $"当前节点：{nodeName}";
+        _cardMode.Text = $"当前模式：{AccelerationModeZh(_accelerationMode)}";
+        _cardTun.Text = $"TUN状态：{wintunState}";
+        _cardMatched.Text = $"命中进程：{matched}";
+        _cardRoute.Text = $"当前路由：{route}";
 
         Log($"[DIAG] Engine={_engineState}, Error={_lastEngineError}, Wintun={wintunState}, SB={SingBoxVersion}, Node={nodeName}, Games={games}, Cfg={_lastConfigPath ?? "-"}");
         Log($"[DIAG] LastLogs={tail}");
@@ -2092,6 +2339,25 @@ public sealed class MainForm : Form
         catch { }
     }
 
+    private void RefreshLogViews()
+    {
+        var level = _logLevelFilter.SelectedItem?.ToString() ?? "全部";
+        _logEngineView.Text = string.Join("\r\n", FilterLogEntries(_recentEngineLogs, level).Select(x => x.ToString()));
+        _logCoreView.Text = string.Join("\r\n", FilterLogEntries(_recentCoreLogs, level).Select(x => x.ToString()));
+        _logNetView.Text = string.Join("\r\n", FilterLogEntries(_recentProbeLogs, level).Select(x => x.ToString()));
+    }
+
+    private IEnumerable<LogEntry> FilterLogEntries(IEnumerable<LogEntry> src, string zhLevel)
+    {
+        return zhLevel switch
+        {
+            "信息" => src.Where(x => x.Level.Equals("INFO", StringComparison.OrdinalIgnoreCase)),
+            "警告" => src.Where(x => x.Level.Equals("WARN", StringComparison.OrdinalIgnoreCase)),
+            "错误" => src.Where(x => x.Level.Equals("ERROR", StringComparison.OrdinalIgnoreCase)),
+            _ => src
+        };
+    }
+
     private void LogEngine(string msg) => LogEx("INFO", "engine", msg, _recentEngineLogs);
     private void LogCore(string msg) => LogEx("INFO", "core", msg, _recentCoreLogs);
     private void LogProbe(string msg) => LogEx("INFO", "probe", msg, _recentProbeLogs);
@@ -2102,6 +2368,7 @@ public sealed class MainForm : Form
         bucket.Add(e);
         if (bucket.Count > 200) bucket.RemoveRange(0, bucket.Count - 200);
         Log($"[{source}] {msg}");
+        RefreshLogViews();
     }
 
     private List<string> GetRecentCoreLogs(int n)
