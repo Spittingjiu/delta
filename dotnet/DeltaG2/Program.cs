@@ -27,7 +27,7 @@ internal static class Program
 
 public sealed class MainForm : Form
 {
-    private const string Version = "G6.41";
+    private const string Version = "G6.42";
     private const string SingBoxVersion = "1.13.3";
     private const string UpdateManifestUrl = "https://delta.zzao.de/latest.json";
     private const string DefaultExeUrlTemplate = "https://delta.zzao.de/releases/Delta v{0}.exe";
@@ -2132,7 +2132,11 @@ public sealed class MainForm : Form
                 _btnUpdate.Enabled = true;
                 Log("发现更新: " + _updateStatus.Text);
                 if (manual)
-                    MessageBox.Show(_updateStatus.Text, "检查更新", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                {
+                    var ask = MessageBox.Show(_updateStatus.Text + "\n\n是否现在更新？", "检查更新", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+                    if (ask == DialogResult.Yes)
+                        await UpdateToLatestAsync();
+                }
             }
             else
             {
