@@ -7,7 +7,6 @@ Delta 是一个 Windows 端 HY2 加速客户端实验项目，目标是做“可
 ## 目录结构
 
 - `dotnet/DeltaG2/`：主客户端（WinForms）
-- `dotnet/DeltaIPProbe/`：独立 IP / 接管验证工具
 - `cmd/`：Go 侧启动与相关辅助代码
 - `scripts/`：构建/辅助脚本
 
@@ -17,7 +16,6 @@ Delta 是一个 Windows 端 HY2 加速客户端实验项目，目标是做“可
 - 更新检查与一键更新（从 `delta.zzao.de/latest.json` 拉取）
 - 网络修复（清理代理、重置网络栈）
 - TUN 前置检查（含 Wintun 安装路径）
-- 独立 `DeltaIPProbe.exe` 用于直连/代理 IP 与接管验证
 
 ## 本地构建
 
@@ -37,17 +35,6 @@ dotnet publish -c Release -r win-x64 --self-contained false /p:PublishSingleFile
 
 - `dist-g6/Delta.exe`
 
-### 构建 IPProbe
-
-```bash
-cd dotnet/DeltaIPProbe
-dotnet publish -c Release -r win-x64 --self-contained false /p:PublishSingleFile=true -o ../../dist-g6/ipprobe
-```
-
-输出示例：
-
-- `dist-g6/ipprobe/DeltaIPProbe.exe`
-
 ## 发布约定
 
 - 版本命名：`Delta vGx.x.exe`
@@ -61,7 +48,6 @@ dotnet publish -c Release -r win-x64 --self-contained false /p:PublishSingleFile
 - `exeFileName`
 - `singBoxUrl`
 - `hy2Url`
-- `ipProbeUrl`
 
 ## 注意事项
 
