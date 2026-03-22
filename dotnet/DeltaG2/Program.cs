@@ -23,7 +23,7 @@ internal static class Program
 
 public sealed class MainForm : Form
 {
-    private const string Version = "G6.29";
+    private const string Version = "G6.30";
     private const string SingBoxVersion = "1.10.3";
     private const string UpdateManifestUrl = "https://delta.zzao.de/latest.json";
     private const string DefaultExeUrlTemplate = "https://delta.zzao.de/releases/Delta v{0}.exe";
@@ -67,6 +67,7 @@ public sealed class MainForm : Form
     private readonly Label _engineStatus = new() { AutoSize = true, Text = "引擎：未连接" };
     private readonly Label _verifyStatus = new() { AutoSize = true, Text = "验证：未执行" };
     private readonly Label _updateStatus = new() { AutoSize = true, Text = "更新：检查中" };
+    private readonly Label _routeStatus = new() { AutoSize = true, Text = "路由：未生成" };
     private readonly Label _ipDirect = new() { AutoSize = true, Text = "直连IP：-" };
     private readonly Label _ipProxy = new() { AutoSize = true, Text = "代理IP：-" };
 
@@ -74,6 +75,8 @@ public sealed class MainForm : Form
     private readonly TextBox _hy2Ip = new() { Width = 170, Text = "178.22.26.114" };
     private readonly TextBox _hy2Port = new() { Width = 70, Text = "8443" };
     private readonly TextBox _hy2Token = new() { Width = 260 };
+    private readonly TextBox _gameProcessPaths = new() { Width = 360, PlaceholderText = "游戏EXE全路径，支持多个(;分隔)" };
+    private readonly TextBox _launcherProcessPaths = new() { Width = 360, PlaceholderText = "启动器EXE全路径，可选，支持多个(;)" };
 
     private readonly TextBox _log = new()
     {
@@ -162,7 +165,7 @@ public sealed class MainForm : Form
         var cfgPanel = new FlowLayoutPanel
         {
             Dock = DockStyle.Top,
-            Height = 72,
+            Height = 124,
             AutoSize = false,
             WrapContents = true,
             Padding = new Padding(8, 4, 8, 4)
@@ -171,11 +174,15 @@ public sealed class MainForm : Form
         var btnEngineStop = new Button { Text = "停止接管引擎", AutoSize = true };
         var btnEngineRestart = new Button { Text = "重启接管引擎", AutoSize = true };
         var btnNetRepair = new Button { Text = "一键网络修复", AutoSize = true };
+        var btnPickGame = new Button { Text = "选择游戏EXE", AutoSize = true };
+        var btnPickLauncher = new Button { Text = "选择启动器EXE", AutoSize = true };
         var chkTunMode = new CheckBox { Text = "TUN模式(需虚拟网卡)", AutoSize = true, Checked = true };
 
         btnEngineStop.Click += (_, _) => StopEngine();
         btnEngineRestart.Click += async (_, _) => await RestartEngineAsync();
         btnNetRepair.Click += async (_, _) => await RepairNetworkAsync();
+        btnPickGame.Click += (_, _) => PickExeInto(_gameProcessPaths);
+        btnPickLauncher.Click += (_, _) => PickExeInto(_launcherProcessPaths);
         chkTunMode.CheckedChanged += (_, _) => _useTunMode = chkTunMode.Checked;
 
         cfgPanel.Controls.Add(new Label { Text = "HY2 IP", AutoSize = true, Padding = new Padding(0, 8, 0, 0) });
@@ -184,6 +191,12 @@ public sealed class MainForm : Form
         cfgPanel.Controls.Add(_hy2Port);
         cfgPanel.Controls.Add(new Label { Text = "Token", AutoSize = true, Padding = new Padding(0, 8, 0, 0) });
         cfgPanel.Controls.Add(_hy2Token);
+        cfgPanel.Controls.Add(new Label { Text = "游戏路径", AutoSize = true, Padding = new Padding(0, 8, 0, 0) });
+        cfgPanel.Controls.Add(_gameProcessPaths);
+        cfgPanel.Controls.Add(btnPickGame);
+        cfgPanel.Controls.Add(new Label { Text = "启动器路径", AutoSize = true, Padding = new Padding(0, 8, 0, 0) });
+        cfgPanel.Controls.Add(_launcherProcessPaths);
+        cfgPanel.Controls.Add(btnPickLauncher);
         cfgPanel.Controls.Add(chkTunMode);
         cfgPanel.Controls.Add(btnEngineStop);
         cfgPanel.Controls.Add(btnEngineRestart);
@@ -213,6 +226,8 @@ public sealed class MainForm : Form
         verifyPanel.Controls.Add(new Label { Text = "   " });
         verifyPanel.Controls.Add(_updateStatus);
         verifyPanel.Controls.Add(new Label { Text = "   " });
+        verifyPanel.Controls.Add(_routeStatus);
+        verifyPanel.Controls.Add(new Label { Text = "   " });
         verifyPanel.Controls.Add(_ipDirect);
         verifyPanel.Controls.Add(new Label { Text = "   " });
         verifyPanel.Controls.Add(_ipProxy);
@@ -235,6 +250,8 @@ public sealed class MainForm : Form
             _hy2Ip.Text = string.IsNullOrWhiteSpace(settings.Hy2Server) ? "178.22.26.114" : settings.Hy2Server;
             _hy2Port.Text = settings.Hy2Port <= 0 ? "8443" : settings.Hy2Port.ToString();
             _hy2Token.Text = settings.Hy2Token ?? "";
+            _gameProcessPaths.Text = settings.GameProcessPaths ?? "";
+            _launcherProcessPaths.Text = settings.LauncherProcessPaths ?? "";
 
             Log("Delta 版本: " + Version);
             Log($"管理员权限: {(IsAdmin() ? "是" : "否")}");
@@ -328,6 +345,27 @@ public sealed class MainForm : Form
         {
             _status.Text = $"状态：接管策略已启用（{_activeProcess}）";
             await VerifyTakeoverAsync();
+        }
+    }
+
+    private void PickExeInto(TextBox target)
+    {
+        using var ofd = new OpenFileDialog
+        {
+            Filter = "Executable|*.exe",
+            Multiselect = true,
+            Title = "选择 EXE"
+        };
+        if (ofd.ShowDialog() == DialogResult.OK)
+        {
+            var existing = (target.Text ?? "").Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
+            foreach (var f in ofd.FileNames)
+            {
+                if (!existing.Any(x => x.Equals(f, StringComparison.OrdinalIgnoreCase)))
+                    existing.Add(f);
+            }
+            target.Text = string.Join(';', existing);
+            SaveSettings();
         }
     }
 
@@ -982,6 +1020,72 @@ public sealed class MainForm : Form
         var processExe = processName.Trim();
         var processBare = Path.GetFileNameWithoutExtension(processExe);
 
+        var gamePaths = (_gameProcessPaths.Text ?? "")
+            .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        var launcherPaths = (_launcherProcessPaths.Text ?? "")
+            .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        if (gamePaths.Count == 0)
+        {
+            // fallback: 至少用 process_name
+            gamePaths.Add(processExe);
+        }
+
+        var rules = new List<object>();
+
+        // 优先 process_path（游戏）
+        var gameRulePaths = gamePaths.Where(x => x.Contains('\\') || x.Contains('/')).ToArray();
+        if (gameRulePaths.Length > 0)
+        {
+            rules.Add(new
+            {
+                process_path = gameRulePaths,
+                action = "route",
+                outbound = "hy2-out"
+            });
+        }
+
+        // 启动器路径
+        var launcherRulePaths = launcherPaths.Where(x => x.Contains('\\') || x.Contains('/')).ToArray();
+        if (launcherRulePaths.Length > 0)
+        {
+            rules.Add(new
+            {
+                process_path = launcherRulePaths,
+                action = "route",
+                outbound = "hy2-out"
+            });
+        }
+
+        // fallback process_name
+        var nameFallback = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { processExe, processBare };
+        foreach (var gp in gamePaths)
+        {
+            var n = Path.GetFileName(gp);
+            var b = Path.GetFileNameWithoutExtension(gp);
+            if (!string.IsNullOrWhiteSpace(n)) nameFallback.Add(n);
+            if (!string.IsNullOrWhiteSpace(b)) nameFallback.Add(b);
+        }
+        foreach (var lp in launcherPaths)
+        {
+            var n = Path.GetFileName(lp);
+            var b = Path.GetFileNameWithoutExtension(lp);
+            if (!string.IsNullOrWhiteSpace(n)) nameFallback.Add(n);
+            if (!string.IsNullOrWhiteSpace(b)) nameFallback.Add(b);
+        }
+
+        rules.Add(new
+        {
+            process_name = nameFallback.ToArray(),
+            action = "route",
+            outbound = "hy2-out"
+        });
+
         object cfg;
         if (useTunMode)
         {
@@ -1011,28 +1115,15 @@ public sealed class MainForm : Form
                         server = serverIp,
                         server_port = serverPort,
                         password = token,
-                        tls = new
-                        {
-                            enabled = true,
-                            server_name = "www.bing.com",
-                            insecure = true
-                        }
+                        tls = new { enabled = true, server_name = "www.bing.com", insecure = true }
                     },
-                    new { type = "direct", tag = "direct" },
-                    new { type = "block", tag = "block" }
+                    new { type = "direct", tag = "direct" }
                 },
                 route = new
                 {
                     auto_detect_interface = true,
-                    final = "hy2-out",
-                    rules = new object[]
-                    {
-                        new
-                        {
-                            process_name = new[] { processExe, processBare },
-                            outbound = "hy2-out"
-                        }
-                    }
+                    rules = rules,
+                    final = "direct"
                 }
             };
         }
@@ -1054,18 +1145,14 @@ public sealed class MainForm : Form
                         server = serverIp,
                         server_port = serverPort,
                         password = token,
-                        tls = new
-                        {
-                            enabled = true,
-                            server_name = "www.bing.com",
-                            insecure = true
-                        }
+                        tls = new { enabled = true, server_name = "www.bing.com", insecure = true }
                     },
                     new { type = "direct", tag = "direct" }
                 },
                 route = new
                 {
-                    final = "hy2-out"
+                    rules = rules,
+                    final = "direct"
                 }
             };
         }
@@ -1073,8 +1160,13 @@ public sealed class MainForm : Form
         var text = JsonSerializer.Serialize(cfg, new JsonSerializerOptions { WriteIndented = true });
         await File.WriteAllTextAsync(cfgPath, text);
 
+        _routeStatus.Text = $"路由：{rules.Count}条规则，final=direct";
         Log($"已写入接管配置: {cfgPath}");
-        Log($"规则: process_name=[{processExe}, {processBare}] -> hy2-out");
+        Log($"规则(游戏路径): {string.Join(" | ", gameRulePaths)}");
+        if (launcherRulePaths.Length > 0)
+            Log($"规则(启动器路径): {string.Join(" | ", launcherRulePaths)}");
+        Log($"规则(名称回退): {string.Join(",", nameFallback)} -> hy2-out");
+        Log("回退保护：未匹配流量走 direct");
         if (useTunMode)
         {
             Log($"TUN 接口名: {tunInterface}");
@@ -1084,8 +1176,10 @@ public sealed class MainForm : Form
         {
             Log("当前模式：无TUN（mixed入站 127.0.0.1:10809）");
         }
+
         return cfgPath;
     }
+
 
     private async Task CheckUpdateAsync(bool manual)
     {
@@ -1332,7 +1426,9 @@ public sealed class MainForm : Form
                 Hy2Server = (_hy2Ip.Text ?? "").Trim(),
                 Hy2Token = (_hy2Token.Text ?? "").Trim(),
                 Hy2Port = int.TryParse((_hy2Port.Text ?? "8443").Trim(), out var n) ? n : 8443,
-                LastSeenVersion = current.LastSeenVersion
+                LastSeenVersion = current.LastSeenVersion,
+                GameProcessPaths = (_gameProcessPaths.Text ?? "").Trim(),
+                LauncherProcessPaths = (_launcherProcessPaths.Text ?? "").Trim()
             };
             File.WriteAllText(p, JsonSerializer.Serialize(s));
         }
@@ -1368,6 +1464,8 @@ public sealed class DeltaSettings
     public string? Hy2Token { get; set; }
     public int Hy2Port { get; set; } = 8443;
     public string? LastSeenVersion { get; set; }
+    public string? GameProcessPaths { get; set; }
+    public string? LauncherProcessPaths { get; set; }
 }
 
 public sealed class NetRow
