@@ -27,7 +27,7 @@ internal static class Program
 
 public sealed class MainForm : Form
 {
-    private const string Version = "G6.36";
+    private const string Version = "G6.37";
     private const string SingBoxVersion = "1.10.3";
     private const string UpdateManifestUrl = "https://delta.zzao.de/latest.json";
     private const string DefaultExeUrlTemplate = "https://delta.zzao.de/releases/Delta v{0}.exe";
@@ -69,11 +69,19 @@ public sealed class MainForm : Form
         NodeProbeFailed,
         Unknown
     }
+
+    private enum AccelerationMode
+    {
+        Stable,
+        Balanced,
+        Performance
+    }
     private static string ReleaseNotes => $@"{Version} 更新内容
 
-- P0补强：TUN状态机改为确定性流转，新增 TunCreateTimeout 等错误码
-- TUN就绪改为“核心日志+进程存活+网卡状态”联合判定
-- 增加全隧道验证模式（final=hy2-out，仅用于排障）";
+- 模板实质化：Stable/Balanced/Performance 现在影响 TUN 与运行参数
+- Stable：更保守（sniff off、更长超时）
+- Balanced：默认平衡
+- Performance：更激进（更短超时、strict_route off）";
 
     private readonly ComboBox _processCombo = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 320 };
     private readonly ComboBox _nodeCombo = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 180 };
@@ -131,6 +139,7 @@ public sealed class MainForm : Form
     private string? _lastConfigBackupPath;
     private bool _manualStopping = false;
     private int _autoRestartCount = 0;
+    private AccelerationMode _accelerationMode = AccelerationMode.Stable;
     private readonly List<LogEntry> _recentEngineLogs = new();
     private readonly List<LogEntry> _recentCoreLogs = new();
     private readonly List<LogEntry> _recentProbeLogs = new();
@@ -583,7 +592,7 @@ public sealed class MainForm : Form
             _engineProc.BeginErrorReadLine();
 
             SetEngineState(EngineState.WaitingTunReady);
-            var ready = await WaitForTunReadyAsync(_engineProc, TimeSpan.FromSeconds(8));
+            var ready = await WaitForTunReadyAsync(_engineProc, TimeSpan.FromMilliseconds(TemplateTunReadyTimeoutMs()));
             if (!ready)
             {
                 try { _engineProc.Kill(true); } catch { }
@@ -591,7 +600,7 @@ public sealed class MainForm : Form
                 return false;
             }
 
-            var hs = await WaitForHy2HandshakeAsync(ip, port, 4000);
+            var hs = await WaitForHy2HandshakeAsync(ip, port, TemplateHandshakeTimeoutMs());
             if (!hs)
             {
                 FailEngine(EngineError.HysteriaHandshakeFailed, $"未检测到到 {ip}:{port} 的握手连接");
@@ -1215,19 +1224,58 @@ public sealed class MainForm : Form
     private void ApplySelectedProfileTemplate()
     {
         var tpl = _profileCombo.SelectedItem?.ToString() ?? "Stable Mode";
+        _hy2Sni.Text = string.IsNullOrWhiteSpace(_hy2Sni.Text) ? "www.bing.com" : _hy2Sni.Text;
+
         switch (tpl)
         {
             case "Stable Mode":
-                _hy2Sni.Text = string.IsNullOrWhiteSpace(_hy2Sni.Text) ? "www.bing.com" : _hy2Sni.Text;
+                _accelerationMode = AccelerationMode.Stable;
                 break;
             case "Balanced Mode":
-                _hy2Sni.Text = string.IsNullOrWhiteSpace(_hy2Sni.Text) ? "www.bing.com" : _hy2Sni.Text;
+                _accelerationMode = AccelerationMode.Balanced;
                 break;
             case "Performance Mode":
-                _hy2Sni.Text = string.IsNullOrWhiteSpace(_hy2Sni.Text) ? "www.bing.com" : _hy2Sni.Text;
+                _accelerationMode = AccelerationMode.Performance;
+                break;
+            default:
+                _accelerationMode = AccelerationMode.Stable;
                 break;
         }
-        Log($"已应用模板: {tpl}");
+
+        Log($"已应用模板: {tpl} (mode={_accelerationMode})");
+        UpdateDiagnostics();
+    }
+
+    private bool TemplateTunSniff()
+    {
+        return _accelerationMode != AccelerationMode.Stable;
+    }
+
+    private bool TemplateTunStrictRoute()
+    {
+        return _accelerationMode != AccelerationMode.Performance;
+    }
+
+    private int TemplateTunReadyTimeoutMs()
+    {
+        return _accelerationMode switch
+        {
+            AccelerationMode.Stable => 10000,
+            AccelerationMode.Balanced => 8000,
+            AccelerationMode.Performance => 6000,
+            _ => 8000
+        };
+    }
+
+    private int TemplateHandshakeTimeoutMs()
+    {
+        return _accelerationMode switch
+        {
+            AccelerationMode.Stable => 6000,
+            AccelerationMode.Balanced => 4000,
+            AccelerationMode.Performance => 3000,
+            _ => 4000
+        };
     }
 
     private async Task RunStabilityCyclesAsync(int rounds)
@@ -1414,7 +1462,7 @@ public sealed class MainForm : Form
         var games = (_gameProcessPaths.Text ?? "").Trim();
         var tail = GetLogTail(8).Replace("\r", " ").Replace("\n", " | ");
 
-        _diagStatus.Text = $"诊断: S={_engineState}/{_lastEngineError}, Wintun={wintunState}, SB={SingBoxVersion}, Node={nodeName}";
+        _diagStatus.Text = $"诊断: S={_engineState}/{_lastEngineError}, Wintun={wintunState}, SB={SingBoxVersion}, Node={nodeName}, Mode={_accelerationMode}";
 
         Log($"[DIAG] Engine={_engineState}, Error={_lastEngineError}, Wintun={wintunState}, SB={SingBoxVersion}, Node={nodeName}, Games={games}, Cfg={_lastConfigPath ?? "-"}");
         Log($"[DIAG] LastLogs={tail}");
@@ -1684,9 +1732,9 @@ public sealed class MainForm : Form
                         interface_name = tunInterface,
                         inet4_address = tunCidr,
                         auto_route = true,
-                        strict_route = true,
+                        strict_route = TemplateTunStrictRoute(),
                         stack = "system",
-                        sniff = true
+                        sniff = TemplateTunSniff()
                     }
                 },
                 outbounds = new object[]
