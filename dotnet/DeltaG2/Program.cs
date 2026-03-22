@@ -3,6 +3,10 @@ using System.Drawing;
 using System.IO.Compression;
 using System.Net;
 using System.Net.NetworkInformation;
+using System.Net.Sockets;
+using System.Net.Security;
+using System.Security.Authentication;
+using System.Security.Cryptography.X509Certificates;
 using System.Security.Principal;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -23,7 +27,7 @@ internal static class Program
 
 public sealed class MainForm : Form
 {
-    private const string Version = "G6.30";
+    private const string Version = "G6.34";
     private const string SingBoxVersion = "1.10.3";
     private const string UpdateManifestUrl = "https://delta.zzao.de/latest.json";
     private const string DefaultExeUrlTemplate = "https://delta.zzao.de/releases/Delta v{0}.exe";
@@ -48,33 +52,43 @@ public sealed class MainForm : Form
     private enum EngineError
     {
         None,
-        AdminRequired,
-        WintunCheckFailed,
-        WintunInstallFailed,
-        ConfigGenerateFailed,
+        TunAdminRequired,
+        TunDriverMissing,
+        TunDriverInstallFailed,
+        TunDriverVerifyFailed,
         CoreStartFailed,
         TunCreateFailed,
+        HysteriaHandshakeFailed,
+        RouteRuleNotMatched,
+        ConfigGenerateFailed,
         Unknown
     }
     private static string ReleaseNotes => $@"{Version} 更新内容
 
-- 移除 INF/pnputil 驱动安装流程
-- 改为仅准备 wintun.dll（从 wintun zip 解压 bin/amd64/wintun.dll 到程序目录）
-- 以 sing-box TUN 创建成功/失败作为唯一接管判定信号";
+- STEP3补强：节点测试增加TLS握手/证书状态校验（含SNI）
+- 服务端一致性检查结果并入诊断日志
+- 运行稳定性细节修复（重启/回滚/诊断状态）";
 
     private readonly ComboBox _processCombo = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 320 };
+    private readonly ComboBox _nodeCombo = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 180 };
+    private readonly ComboBox _profileCombo = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 140 };
     private readonly Label _status = new() { AutoSize = true, Text = "状态：未接管" };
     private readonly Label _engineStatus = new() { AutoSize = true, Text = "引擎：未连接" };
     private readonly Label _verifyStatus = new() { AutoSize = true, Text = "验证：未执行" };
     private readonly Label _updateStatus = new() { AutoSize = true, Text = "更新：检查中" };
     private readonly Label _routeStatus = new() { AutoSize = true, Text = "路由：未生成" };
+    private readonly Label _diagStatus = new() { AutoSize = true, Text = "诊断：未初始化" };
+    private readonly Label _nodeHealthStatus = new() { AutoSize = true, Text = "节点健康：未测试" };
     private readonly Label _ipDirect = new() { AutoSize = true, Text = "直连IP：-" };
     private readonly Label _ipProxy = new() { AutoSize = true, Text = "代理IP：-" };
 
 
     private readonly TextBox _hy2Ip = new() { Width = 170, Text = "178.22.26.114" };
     private readonly TextBox _hy2Port = new() { Width = 70, Text = "8443" };
-    private readonly TextBox _hy2Token = new() { Width = 260 };
+    private readonly TextBox _hy2Token = new() { Width = 220 };
+    private readonly TextBox _hy2Sni = new() { Width = 160, Text = "www.bing.com" };
+    private readonly TextBox _hy2ObfsType = new() { Width = 110, PlaceholderText = "obfs type" };
+    private readonly TextBox _hy2ObfsPassword = new() { Width = 140, PlaceholderText = "obfs pass" };
     private readonly TextBox _gameProcessPaths = new() { Width = 360, PlaceholderText = "游戏EXE全路径，支持多个(;分隔)" };
     private readonly TextBox _launcherProcessPaths = new() { Width = 360, PlaceholderText = "启动器EXE全路径，可选，支持多个(;)" };
 
@@ -104,6 +118,12 @@ public sealed class MainForm : Form
     private EngineState _engineState = EngineState.Idle;
     private EngineError _lastEngineError = EngineError.None;
     private int _engineRunId = 0;
+    private EngineError _lastTunPrepError = EngineError.None;
+    private readonly List<Hy2NodeProfile> _nodes = new();
+    private string? _lastConfigPath;
+    private string? _lastConfigBackupPath;
+    private bool _manualStopping = false;
+    private int _autoRestartCount = 0;
 
     private void SetEngineState(EngineState state)
     {
@@ -143,18 +163,42 @@ public sealed class MainForm : Form
         var btnApply = new Button { Text = "开始接管(进程->HY2)", AutoSize = true };
         var btnVerify = new Button { Text = "验证接管", AutoSize = true };
         var btnRollback = new Button { Text = "停止/回滚", AutoSize = true };
+        var btnNodeUpsert = new Button { Text = "保存节点", AutoSize = true };
+        var btnNodeRemove = new Button { Text = "删除节点", AutoSize = true };
+        var btnNodeTest = new Button { Text = "测试节点", AutoSize = true };
+        var btnNodeImport = new Button { Text = "导入节点", AutoSize = true };
+        var btnNodeExport = new Button { Text = "导出节点", AutoSize = true };
+        var btnStability = new Button { Text = "稳定性测试(5轮)", AutoSize = true };
         var chkVerbose = new CheckBox { Text = "详细日志", AutoSize = true };
 
         btnRefresh.Click += (_, _) => RefreshProcesses();
         btnApply.Click += async (_, _) => await ApplyTakeoverAsync();
         btnVerify.Click += async (_, _) => await VerifyTakeoverAsync();
         btnRollback.Click += (_, _) => Rollback();
+        btnNodeUpsert.Click += (_, _) => UpsertCurrentNode();
+        btnNodeRemove.Click += (_, _) => RemoveCurrentNode();
+        btnNodeTest.Click += async (_, _) => await TestCurrentNodeAsync();
+        btnNodeImport.Click += (_, _) => ImportNodes();
+        btnNodeExport.Click += (_, _) => ExportNodes();
+        btnStability.Click += async (_, _) => await RunStabilityCyclesAsync(5);
+        _nodeCombo.SelectedIndexChanged += (_, _) => ApplySelectedNodeToInputs();
+        _profileCombo.SelectedIndexChanged += (_, _) => ApplySelectedProfileTemplate();
         _btnCheckUpdate.Click += async (_, _) => await CheckUpdateAsync(true);
         chkVerbose.CheckedChanged += (_, _) => _verboseLogs = chkVerbose.Checked;
         _btnUpdate.Click += async (_, _) => await UpdateToLatestAsync();
 
         top.Controls.Add(btnRefresh);
         top.Controls.Add(_processCombo);
+        top.Controls.Add(new Label { Text = "节点", AutoSize = true, Padding = new Padding(0, 8, 0, 0) });
+        top.Controls.Add(_nodeCombo);
+        top.Controls.Add(btnNodeUpsert);
+        top.Controls.Add(btnNodeRemove);
+        top.Controls.Add(btnNodeTest);
+        top.Controls.Add(btnNodeImport);
+        top.Controls.Add(btnNodeExport);
+        top.Controls.Add(btnStability);
+        top.Controls.Add(new Label { Text = "模板", AutoSize = true, Padding = new Padding(0, 8, 0, 0) });
+        top.Controls.Add(_profileCombo);
         top.Controls.Add(btnApply);
         top.Controls.Add(btnVerify);
         top.Controls.Add(btnRollback);
@@ -165,7 +209,7 @@ public sealed class MainForm : Form
         var cfgPanel = new FlowLayoutPanel
         {
             Dock = DockStyle.Top,
-            Height = 124,
+            Height = 156,
             AutoSize = false,
             WrapContents = true,
             Padding = new Padding(8, 4, 8, 4)
@@ -191,6 +235,11 @@ public sealed class MainForm : Form
         cfgPanel.Controls.Add(_hy2Port);
         cfgPanel.Controls.Add(new Label { Text = "Token", AutoSize = true, Padding = new Padding(0, 8, 0, 0) });
         cfgPanel.Controls.Add(_hy2Token);
+        cfgPanel.Controls.Add(new Label { Text = "SNI", AutoSize = true, Padding = new Padding(0, 8, 0, 0) });
+        cfgPanel.Controls.Add(_hy2Sni);
+        cfgPanel.Controls.Add(new Label { Text = "Obfs", AutoSize = true, Padding = new Padding(0, 8, 0, 0) });
+        cfgPanel.Controls.Add(_hy2ObfsType);
+        cfgPanel.Controls.Add(_hy2ObfsPassword);
         cfgPanel.Controls.Add(new Label { Text = "游戏路径", AutoSize = true, Padding = new Padding(0, 8, 0, 0) });
         cfgPanel.Controls.Add(_gameProcessPaths);
         cfgPanel.Controls.Add(btnPickGame);
@@ -228,6 +277,10 @@ public sealed class MainForm : Form
         verifyPanel.Controls.Add(new Label { Text = "   " });
         verifyPanel.Controls.Add(_routeStatus);
         verifyPanel.Controls.Add(new Label { Text = "   " });
+        verifyPanel.Controls.Add(_nodeHealthStatus);
+        verifyPanel.Controls.Add(new Label { Text = "   " });
+        verifyPanel.Controls.Add(_diagStatus);
+        verifyPanel.Controls.Add(new Label { Text = "   " });
         verifyPanel.Controls.Add(_ipDirect);
         verifyPanel.Controls.Add(new Label { Text = "   " });
         verifyPanel.Controls.Add(_ipProxy);
@@ -242,6 +295,7 @@ public sealed class MainForm : Form
         {
             SaveSettings();
             StopEngine();
+            CleanupStaleTemp();
         };
 
         Load += (_, _) =>
@@ -250,8 +304,18 @@ public sealed class MainForm : Form
             _hy2Ip.Text = string.IsNullOrWhiteSpace(settings.Hy2Server) ? "178.22.26.114" : settings.Hy2Server;
             _hy2Port.Text = settings.Hy2Port <= 0 ? "8443" : settings.Hy2Port.ToString();
             _hy2Token.Text = settings.Hy2Token ?? "";
+            _hy2Sni.Text = string.IsNullOrWhiteSpace(settings.Hy2Sni) ? "www.bing.com" : settings.Hy2Sni!;
+            _hy2ObfsType.Text = settings.Hy2ObfsType ?? "";
+            _hy2ObfsPassword.Text = settings.Hy2ObfsPassword ?? "";
             _gameProcessPaths.Text = settings.GameProcessPaths ?? "";
             _launcherProcessPaths.Text = settings.LauncherProcessPaths ?? "";
+            _nodes.Clear();
+            if (settings.Nodes != null) _nodes.AddRange(settings.Nodes.Where(n => !string.IsNullOrWhiteSpace(n.DisplayName) && !string.IsNullOrWhiteSpace(n.Server)));
+            SeedDefaultNodeIfNeeded();
+            RefreshNodeUi();
+            _profileCombo.Items.Clear();
+            _profileCombo.Items.AddRange(new object[] { "Stable Mode", "Balanced Mode", "Performance Mode" });
+            _profileCombo.SelectedIndex = 0;
 
             Log("Delta 版本: " + Version);
             Log($"管理员权限: {(IsAdmin() ? "是" : "否")}");
@@ -266,6 +330,7 @@ public sealed class MainForm : Form
             }
             _ = CheckUpdateAsync(false);
             _ = RefreshIpProbeAsync();
+            UpdateDiagnostics();
         };
     }
 
@@ -309,6 +374,7 @@ public sealed class MainForm : Form
 
         _activeProcess = proc;
         Log($"目标进程: {_activeProcess}");
+        Log($"当前节点: {_nodeCombo.Text}");
 
         if (!_useTunMode)
         {
@@ -414,7 +480,7 @@ public sealed class MainForm : Form
                 SetEngineState(EngineState.CheckingAdmin);
                 if (!IsAdmin())
                 {
-                    FailEngine(EngineError.AdminRequired, "需要管理员权限");
+                    FailEngine(EngineError.TunAdminRequired, "需要管理员权限");
                     return false;
                 }
 
@@ -434,6 +500,7 @@ public sealed class MainForm : Form
             _currentTunInterface = BuildTunInterfaceName();
             _currentTunCidr = BuildTunCidr();
             var cfgPath = await WriteSingBoxConfigAsync(processName, ip, port, token, _currentTunInterface, _currentTunCidr, _useTunMode);
+            _lastConfigPath = cfgPath;
 
             StopEngine();
 
@@ -466,19 +533,26 @@ public sealed class MainForm : Form
                         BeginInvoke(() => Log($"[RUN#{runId}] SB! " + t));
                 }
             };
-            _engineProc.Exited += (_, _) => BeginInvoke(() =>
+            _engineProc.Exited += (_, _) => BeginInvoke(async () =>
             {
                 if (runId != _engineRunId) return;
-                if (_engineState != EngineState.Running)
-                    SetEngineState(EngineState.Failed);
-                else
-                    SetEngineState(EngineState.Idle);
+                var wasRunning = _engineState == EngineState.Running;
+                SetEngineState(wasRunning ? EngineState.Idle : EngineState.Failed);
                 Log($"[RUN#{runId}] 接管引擎已退出");
+                if (!_manualStopping && wasRunning && _autoRestartCount < 2 && !string.IsNullOrWhiteSpace(_activeProcess))
+                {
+                    _autoRestartCount++;
+                    Log($"检测到引擎异常退出，执行受控重启 #{_autoRestartCount}");
+                    await Task.Delay(600);
+                    _ = await StartEngineAsync(_activeProcess);
+                }
+                UpdateDiagnostics();
             });
 
             if (!_engineProc.Start())
             {
                 FailEngine(EngineError.CoreStartFailed, "接管引擎启动失败");
+                TryRollbackPreviousConfig();
                 return false;
             }
             _engineProc.BeginOutputReadLine();
@@ -490,16 +564,29 @@ public sealed class MainForm : Form
             {
                 FailEngine(EngineError.TunCreateFailed, "TUN 接口创建失败或超时");
                 try { _engineProc.Kill(true); } catch { }
+                TryRollbackPreviousConfig();
+                return false;
+            }
+
+            var hs = await WaitForHy2HandshakeAsync(ip, port, 4000);
+            if (!hs)
+            {
+                FailEngine(EngineError.HysteriaHandshakeFailed, $"未检测到到 {ip}:{port} 的握手连接");
+                try { _engineProc.Kill(true); } catch { }
+                TryRollbackPreviousConfig();
                 return false;
             }
 
             SetEngineState(EngineState.Running);
+            _autoRestartCount = 0;
             Log($"[RUN#{runId}] 接管引擎已启动");
+            UpdateDiagnostics();
             return true;
         }
         catch (Exception ex)
         {
             FailEngine(EngineError.Unknown, "接管引擎异常", ex.ToString());
+            TryRollbackPreviousConfig();
             return false;
         }
     }
@@ -539,6 +626,7 @@ public sealed class MainForm : Form
             if (!IsAdmin())
             {
                 Log("[TunAdminRequired] 当前非管理员权限，阻断接管");
+                FailEngine(EngineError.TunAdminRequired, "需要管理员权限");
                 MessageBox.Show("需要管理员权限才能启用 TUN。\n请右键以管理员身份运行 Delta。", "Delta TUN 前置检查", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return false;
             }
@@ -548,6 +636,8 @@ public sealed class MainForm : Form
             if (!ok)
             {
                 Log("[TunDllPrepareFailed] wintun.dll 准备失败");
+                if (_lastTunPrepError == EngineError.None) _lastTunPrepError = EngineError.TunDriverInstallFailed;
+                FailEngine(_lastTunPrepError, "wintun.dll 准备失败");
                 MessageBox.Show("wintun.dll 准备失败，已阻止接管启动。", "Delta TUN 前置检查", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return false;
             }
@@ -583,6 +673,7 @@ public sealed class MainForm : Form
                 }
                 catch (Exception ex)
                 {
+                    _lastTunPrepError = EngineError.TunDriverInstallFailed;
                     Log("[TunDownloadFailed] 下载 Wintun 失败: " + ex.Message);
                     return false;
                 }
@@ -590,6 +681,7 @@ public sealed class MainForm : Form
 
             if (!VerifySha256(cachedZip, WintunZipSha256))
             {
+                _lastTunPrepError = EngineError.TunDriverVerifyFailed;
                 Log("[TunHashMismatch] Wintun zip hash 校验失败");
                 return false;
             }
@@ -609,6 +701,7 @@ public sealed class MainForm : Form
 
             if (string.IsNullOrWhiteSpace(dll) || !File.Exists(dll))
             {
+                _lastTunPrepError = EngineError.TunDriverMissing;
                 Log("[TunDllPrepareFailed] 压缩包内未找到 bin/amd64/wintun.dll");
                 try { Directory.Delete(tempRoot, true); } catch { }
                 return false;
@@ -622,6 +715,7 @@ public sealed class MainForm : Form
         }
         catch (Exception ex)
         {
+            _lastTunPrepError = EngineError.TunDriverInstallFailed;
             Log("[TunDllPrepareFailed] 准备 wintun.dll 异常: " + ex.Message);
             return false;
         }
@@ -729,8 +823,24 @@ public sealed class MainForm : Form
         }
     }
 
+    private void TryRollbackPreviousConfig()
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(_lastConfigPath) || string.IsNullOrWhiteSpace(_lastConfigBackupPath)) return;
+            if (!File.Exists(_lastConfigBackupPath)) return;
+            File.Copy(_lastConfigBackupPath, _lastConfigPath, true);
+            Log($"已回滚上次配置: {_lastConfigBackupPath} -> {_lastConfigPath}");
+        }
+        catch (Exception ex)
+        {
+            Log("回滚配置失败: " + ex.Message);
+        }
+    }
+
     private void StopEngine()
     {
+        _manualStopping = true;
         try
         {
             if (_engineProc != null && !_engineProc.HasExited)
@@ -745,6 +855,8 @@ public sealed class MainForm : Form
             _engineProc?.Dispose();
             _engineProc = null;
             _engineStatus.Text = "引擎：未连接";
+            _manualStopping = false;
+            UpdateDiagnostics();
         }
     }
 
@@ -848,7 +960,8 @@ public sealed class MainForm : Form
                             else
                             {
                                 total++;
-                                checks.Add("❌ 目标进程暂无活跃外网连接，当前无法判断接管效果");
+                                _lastEngineError = EngineError.RouteRuleNotMatched;
+                                checks.Add("❌ 目标进程暂无活跃外网连接，疑似未命中路由规则");
                             }
                         }
                     }
@@ -872,6 +985,7 @@ public sealed class MainForm : Form
                     _verifyStatus.Text = summary;
                     Log(summary);
                     Log(detail);
+                    UpdateDiagnostics();
                 });
             }
             catch (Exception ex)
@@ -883,6 +997,391 @@ public sealed class MainForm : Form
                 });
             }
         });
+    }
+
+    private async Task<bool> WaitForHy2HandshakeAsync(string serverIp, int serverPort, int timeoutMs)
+    {
+        var sw = Stopwatch.StartNew();
+        while (sw.ElapsedMilliseconds < timeoutMs)
+        {
+            try
+            {
+                var rows = GetNetstatRows();
+                var ok = _engineProc != null && !_engineProc.HasExited && rows.Any(r =>
+                    r.Pid == _engineProc.Id &&
+                    r.RemoteAddress == serverIp &&
+                    r.RemotePort == serverPort &&
+                    ((r.Protocol == "TCP" && r.State.Equals("ESTABLISHED", StringComparison.OrdinalIgnoreCase)) || r.Protocol == "UDP"));
+                if (ok) return true;
+            }
+            catch { }
+            await Task.Delay(250);
+        }
+        return false;
+    }
+
+    private void SeedDefaultNodeIfNeeded()
+    {
+        if (_nodes.Count > 0) return;
+        _nodes.Add(new Hy2NodeProfile
+        {
+            DisplayName = "DEOPT-Default",
+            Server = _hy2Ip.Text.Trim(),
+            Port = int.TryParse(_hy2Port.Text.Trim(), out var p) ? p : 8443,
+            Password = _hy2Token.Text.Trim(),
+            Sni = string.IsNullOrWhiteSpace(_hy2Sni.Text) ? "www.bing.com" : _hy2Sni.Text.Trim(),
+            ObfsType = _hy2ObfsType.Text.Trim(),
+            ObfsPassword = _hy2ObfsPassword.Text.Trim()
+        });
+    }
+
+    private void RefreshNodeUi()
+    {
+        var selected = _nodeCombo.SelectedItem?.ToString();
+        _nodeCombo.Items.Clear();
+        foreach (var n in _nodes)
+            _nodeCombo.Items.Add(n.DisplayName);
+        if (_nodeCombo.Items.Count > 0)
+        {
+            var idx = 0;
+            if (!string.IsNullOrWhiteSpace(selected))
+            {
+                var found = _nodes.FindIndex(x => x.DisplayName.Equals(selected, StringComparison.OrdinalIgnoreCase));
+                if (found >= 0) idx = found;
+            }
+            _nodeCombo.SelectedIndex = idx;
+        }
+    }
+
+    private void ApplySelectedNodeToInputs()
+    {
+        if (_nodeCombo.SelectedIndex < 0 || _nodeCombo.SelectedIndex >= _nodes.Count) return;
+        var n = _nodes[_nodeCombo.SelectedIndex];
+        _hy2Ip.Text = n.Server;
+        _hy2Port.Text = n.Port.ToString();
+        _hy2Token.Text = n.Password;
+        _hy2Sni.Text = string.IsNullOrWhiteSpace(n.Sni) ? "www.bing.com" : n.Sni;
+        _hy2ObfsType.Text = n.ObfsType ?? "";
+        _hy2ObfsPassword.Text = n.ObfsPassword ?? "";
+        UpdateDiagnostics();
+    }
+
+    private void UpsertCurrentNode()
+    {
+        var name = (_nodeCombo.Text ?? "").Trim();
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            MessageBox.Show("请先填写节点显示名（可直接在节点下拉框输入）。", "节点管理", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        var port = int.TryParse((_hy2Port.Text ?? "8443").Trim(), out var p) ? p : 8443;
+        var node = new Hy2NodeProfile
+        {
+            DisplayName = name,
+            Server = (_hy2Ip.Text ?? "").Trim(),
+            Port = port,
+            Password = (_hy2Token.Text ?? "").Trim(),
+            Sni = (_hy2Sni.Text ?? "").Trim(),
+            ObfsType = (_hy2ObfsType.Text ?? "").Trim(),
+            ObfsPassword = (_hy2ObfsPassword.Text ?? "").Trim()
+        };
+
+        var idx = _nodes.FindIndex(x => x.DisplayName.Equals(name, StringComparison.OrdinalIgnoreCase));
+        if (idx >= 0) _nodes[idx] = node;
+        else _nodes.Add(node);
+
+        RefreshNodeUi();
+        _nodeCombo.SelectedItem = name;
+        SaveSettings();
+        Log($"节点已保存: {name} ({node.Server}:{node.Port})");
+        UpdateDiagnostics();
+    }
+
+    private void RemoveCurrentNode()
+    {
+        if (_nodeCombo.SelectedIndex < 0 || _nodeCombo.SelectedIndex >= _nodes.Count) return;
+        var name = _nodes[_nodeCombo.SelectedIndex].DisplayName;
+        _nodes.RemoveAt(_nodeCombo.SelectedIndex);
+        RefreshNodeUi();
+        SaveSettings();
+        Log($"节点已删除: {name}");
+        UpdateDiagnostics();
+    }
+
+    private void ImportNodes()
+    {
+        using var ofd = new OpenFileDialog { Filter = "Delta Nodes|*.json" };
+        if (ofd.ShowDialog() != DialogResult.OK) return;
+        try
+        {
+            var json = File.ReadAllText(ofd.FileName);
+            var list = JsonSerializer.Deserialize<List<Hy2NodeProfile>>(json) ?? new List<Hy2NodeProfile>();
+            foreach (var n in list)
+            {
+                if (string.IsNullOrWhiteSpace(n.DisplayName) || string.IsNullOrWhiteSpace(n.Server)) continue;
+                var idx = _nodes.FindIndex(x => x.DisplayName.Equals(n.DisplayName, StringComparison.OrdinalIgnoreCase));
+                if (idx >= 0) _nodes[idx] = n;
+                else _nodes.Add(n);
+            }
+            RefreshNodeUi();
+            SaveSettings();
+            Log($"节点导入完成: {list.Count} 条");
+            UpdateDiagnostics();
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show("节点导入失败: " + ex.Message, "节点管理", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+    }
+
+    private void ExportNodes()
+    {
+        using var sfd = new SaveFileDialog { Filter = "Delta Nodes|*.json", FileName = "delta-nodes.json" };
+        if (sfd.ShowDialog() != DialogResult.OK) return;
+        try
+        {
+            var json = JsonSerializer.Serialize(_nodes, new JsonSerializerOptions { WriteIndented = true });
+            File.WriteAllText(sfd.FileName, json);
+            Log($"节点导出完成: {sfd.FileName}");
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show("节点导出失败: " + ex.Message, "节点管理", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+    }
+
+    private void ApplySelectedProfileTemplate()
+    {
+        var tpl = _profileCombo.SelectedItem?.ToString() ?? "Stable Mode";
+        switch (tpl)
+        {
+            case "Stable Mode":
+                _hy2Sni.Text = string.IsNullOrWhiteSpace(_hy2Sni.Text) ? "www.bing.com" : _hy2Sni.Text;
+                break;
+            case "Balanced Mode":
+                _hy2Sni.Text = string.IsNullOrWhiteSpace(_hy2Sni.Text) ? "www.bing.com" : _hy2Sni.Text;
+                break;
+            case "Performance Mode":
+                _hy2Sni.Text = string.IsNullOrWhiteSpace(_hy2Sni.Text) ? "www.bing.com" : _hy2Sni.Text;
+                break;
+        }
+        Log($"已应用模板: {tpl}");
+    }
+
+    private async Task RunStabilityCyclesAsync(int rounds)
+    {
+        var proc = _processCombo.SelectedItem?.ToString()?.Trim();
+        if (string.IsNullOrWhiteSpace(proc))
+        {
+            MessageBox.Show("请先选择目标游戏进程。", "稳定性测试", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        Log($"开始稳定性测试：{rounds} 轮（进程={proc}，节点={_nodeCombo.Text}）");
+        var ok = 0;
+        var fail = 0;
+
+        for (var i = 1; i <= rounds; i++)
+        {
+            try
+            {
+                Log($"[STABILITY] Round {i}/{rounds} start");
+                var started = await StartEngineAsync(proc);
+                if (!started)
+                {
+                    fail++;
+                    Log($"[STABILITY] Round {i} 启动失败");
+                    TryRollbackPreviousConfig();
+                    await Task.Delay(300);
+                    continue;
+                }
+
+                await Task.Delay(500);
+                await VerifyTakeoverAsync();
+                StopEngine();
+                ok++;
+                Log($"[STABILITY] Round {i} 通过");
+                await Task.Delay(250);
+            }
+            catch (Exception ex)
+            {
+                fail++;
+                Log($"[STABILITY] Round {i} 异常: " + ex.Message);
+                StopEngine();
+                await Task.Delay(250);
+            }
+        }
+
+        Log($"稳定性测试完成：OK={ok}, FAIL={fail}");
+        _diagStatus.Text = $"诊断: 稳定性测试 OK={ok} FAIL={fail}";
+        UpdateDiagnostics();
+    }
+
+    private string ValidateClientServerConsistency(Hy2NodeProfile node)
+    {
+        var issues = new List<string>();
+        if (string.IsNullOrWhiteSpace(node.Server)) issues.Add("server为空");
+        if (node.Port <= 0 || node.Port > 65535) issues.Add("port非法");
+        if (string.IsNullOrWhiteSpace(node.Password)) issues.Add("auth/password为空");
+        if (string.IsNullOrWhiteSpace(node.Sni)) issues.Add("TLS server_name(SNI)为空");
+        if (!string.IsNullOrWhiteSpace(node.ObfsType) && string.IsNullOrWhiteSpace(node.ObfsPassword)) issues.Add("obfs已填type但password为空");
+        if (string.IsNullOrWhiteSpace(node.ObfsType) && !string.IsNullOrWhiteSpace(node.ObfsPassword)) issues.Add("obfs已填password但type为空");
+
+        if (issues.Count == 0) return "服务端参数一致性：OK";
+        return "服务端参数一致性：FAIL - " + string.Join("; ", issues);
+    }
+
+    private async Task TestCurrentNodeAsync()
+    {
+        var node = new Hy2NodeProfile
+        {
+            DisplayName = _nodeCombo.Text,
+            Server = (_hy2Ip.Text ?? "").Trim(),
+            Port = int.TryParse((_hy2Port.Text ?? "8443").Trim(), out var p) ? p : 8443,
+            Password = (_hy2Token.Text ?? "").Trim(),
+            Sni = (_hy2Sni.Text ?? "").Trim(),
+            ObfsType = (_hy2ObfsType.Text ?? "").Trim(),
+            ObfsPassword = (_hy2ObfsPassword.Text ?? "").Trim()
+        };
+
+        var consistency = ValidateClientServerConsistency(node);
+        var result = await TestNodeHealthAsync(node);
+        _nodeHealthStatus.Text = $"节点健康：{result.Grade} ({result.Summary})";
+        Log($"节点测试[{node.DisplayName}] {result.Summary}");
+        Log(consistency);
+        if (consistency.Contains("FAIL", StringComparison.OrdinalIgnoreCase) || result.Summary.Contains("握手失败", StringComparison.OrdinalIgnoreCase))
+            _lastEngineError = EngineError.HysteriaHandshakeFailed;
+        UpdateDiagnostics();
+    }
+
+    private async Task<NodeHealthResult> TestNodeHealthAsync(Hy2NodeProfile node)
+    {
+        var rtts = new List<long>();
+        var failures = new List<string>();
+        var handshakeOk = false;
+        var udpOk = false;
+
+        try
+        {
+            using var ping = new Ping();
+            for (var i = 0; i < 4; i++)
+            {
+                var rep = await ping.SendPingAsync(node.Server, 1200);
+                if (rep.Status == IPStatus.Success) rtts.Add(rep.RoundtripTime);
+            }
+        }
+        catch (Exception ex)
+        {
+            failures.Add("RTT测试异常: " + ex.Message);
+        }
+
+        try
+        {
+            using var tcp = new TcpClient();
+            using var cts = new CancellationTokenSource(2200);
+            await tcp.ConnectAsync(node.Server, node.Port, cts.Token);
+
+            var tlsHost = string.IsNullOrWhiteSpace(node.Sni) ? node.Server : node.Sni!;
+            SslPolicyErrors tlsErrors = SslPolicyErrors.None;
+            using var ssl = new SslStream(tcp.GetStream(), false, (_, _, _, errors) =>
+            {
+                tlsErrors = errors;
+                return true; // 这里只做诊断，不在测试阶段拦截
+            });
+
+            await ssl.AuthenticateAsClientAsync(new SslClientAuthenticationOptions
+            {
+                TargetHost = tlsHost,
+                EnabledSslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13,
+                CertificateRevocationCheckMode = X509RevocationMode.NoCheck
+            }, cts.Token);
+
+            handshakeOk = tcp.Connected && ssl.IsAuthenticated;
+            if (tlsErrors != SslPolicyErrors.None)
+                failures.Add("TLS证书告警: " + tlsErrors);
+        }
+        catch (Exception ex)
+        {
+            failures.Add("握手失败(TCP/TLS): " + ex.Message);
+        }
+
+        try
+        {
+            using var udp = new UdpClient();
+            udp.Client.SendTimeout = 1200;
+            var data = new byte[] { 0x44, 0x45, 0x4C, 0x54, 0x41 };
+            await udp.SendAsync(data, data.Length, node.Server, node.Port);
+            udpOk = true;
+        }
+        catch (Exception ex)
+        {
+            failures.Add("UDP不可达: " + ex.Message);
+        }
+
+        var avg = rtts.Count == 0 ? -1 : (long)rtts.Average();
+        long jitter = 0;
+        if (rtts.Count >= 2)
+        {
+            var diffs = new List<long>();
+            for (var i = 1; i < rtts.Count; i++) diffs.Add(Math.Abs(rtts[i] - rtts[i - 1]));
+            jitter = (long)diffs.Average();
+        }
+
+        var available = handshakeOk && udpOk;
+        var grade = !available ? "Unavailable" : avg <= 90 && jitter <= 20 ? "Fast" : avg <= 180 && jitter <= 50 ? "Normal" : "Poor";
+        var summary = $"HS={(handshakeOk ? "OK" : "FAIL")}, UDP={(udpOk ? "OK" : "FAIL")}, RTT={(avg < 0 ? "N/A" : avg + "ms")}, Jitter={jitter}ms";
+        if (failures.Count > 0) summary += "; " + string.Join(" | ", failures);
+
+        return new NodeHealthResult
+        {
+            Available = available,
+            Grade = grade,
+            AvgRttMs = avg,
+            JitterMs = jitter,
+            Summary = summary
+        };
+    }
+
+    private void UpdateDiagnostics()
+    {
+        var wintunPath = Path.Combine(GetDataDir(), "wintun.dll");
+        var wintunState = File.Exists(wintunPath) ? "Ready" : "Missing";
+        var nodeName = _nodeCombo.SelectedItem?.ToString() ?? (_nodeCombo.Text ?? "-");
+        var games = (_gameProcessPaths.Text ?? "").Trim();
+        var tail = GetLogTail(8).Replace("\r", " ").Replace("\n", " | ");
+
+        _diagStatus.Text = $"诊断: S={_engineState}/{_lastEngineError}, Wintun={wintunState}, SB={SingBoxVersion}, Node={nodeName}";
+
+        Log($"[DIAG] Engine={_engineState}, Error={_lastEngineError}, Wintun={wintunState}, SB={SingBoxVersion}, Node={nodeName}, Games={games}, Cfg={_lastConfigPath ?? "-"}");
+        Log($"[DIAG] LastLogs={tail}");
+    }
+
+    private string GetLogTail(int lines)
+    {
+        var arr = (_log.Text ?? "").Split(new[] { "\r\n", "\n" }, StringSplitOptions.RemoveEmptyEntries);
+        if (arr.Length <= lines) return string.Join("\n", arr);
+        return string.Join("\n", arr.Skip(arr.Length - lines));
+    }
+
+
+    private void CleanupStaleTemp()
+    {
+        try
+        {
+            var temp = Path.GetTempPath();
+            foreach (var d in Directory.GetDirectories(temp, "DeltaWintun_*"))
+            {
+                try
+                {
+                    var di = new DirectoryInfo(d);
+                    if (di.CreationTimeUtc < DateTime.UtcNow.AddHours(-3))
+                        di.Delete(true);
+                }
+                catch { }
+            }
+        }
+        catch { }
     }
 
     private static bool IsLoopback(string ip)
@@ -999,6 +1498,7 @@ public sealed class MainForm : Form
             await File.WriteAllBytesAsync(zipPath, bytes);
         }
 
+        CleanupStaleTemp();
         var extractDir = Path.Combine(dataDir, "sing-box");
         if (Directory.Exists(extractDir)) Directory.Delete(extractDir, true);
         ZipFile.ExtractToDirectory(zipPath, extractDir, true);
@@ -1019,6 +1519,10 @@ public sealed class MainForm : Form
 
         var processExe = processName.Trim();
         var processBare = Path.GetFileNameWithoutExtension(processExe);
+        var sni = (_hy2Sni.Text ?? "www.bing.com").Trim();
+        if (string.IsNullOrWhiteSpace(sni)) sni = "www.bing.com";
+        var obfsType = (_hy2ObfsType.Text ?? "").Trim();
+        var obfsPassword = (_hy2ObfsPassword.Text ?? "").Trim();
 
         var gamePaths = (_gameProcessPaths.Text ?? "")
             .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
@@ -1115,7 +1619,8 @@ public sealed class MainForm : Form
                         server = serverIp,
                         server_port = serverPort,
                         password = token,
-                        tls = new { enabled = true, server_name = "www.bing.com", insecure = true }
+                        tls = new { enabled = true, server_name = sni, insecure = true },
+                        obfs = string.IsNullOrWhiteSpace(obfsType) ? null : new { type = obfsType, password = obfsPassword }
                     },
                     new { type = "direct", tag = "direct" }
                 },
@@ -1145,7 +1650,8 @@ public sealed class MainForm : Form
                         server = serverIp,
                         server_port = serverPort,
                         password = token,
-                        tls = new { enabled = true, server_name = "www.bing.com", insecure = true }
+                        tls = new { enabled = true, server_name = sni, insecure = true },
+                        obfs = string.IsNullOrWhiteSpace(obfsType) ? null : new { type = obfsType, password = obfsPassword }
                     },
                     new { type = "direct", tag = "direct" }
                 },
@@ -1155,6 +1661,12 @@ public sealed class MainForm : Form
                     final = "direct"
                 }
             };
+        }
+
+        if (File.Exists(cfgPath))
+        {
+            _lastConfigBackupPath = cfgPath + ".bak";
+            File.Copy(cfgPath, _lastConfigBackupPath, true);
         }
 
         var text = JsonSerializer.Serialize(cfg, new JsonSerializerOptions { WriteIndented = true });
@@ -1428,7 +1940,11 @@ public sealed class MainForm : Form
                 Hy2Port = int.TryParse((_hy2Port.Text ?? "8443").Trim(), out var n) ? n : 8443,
                 LastSeenVersion = current.LastSeenVersion,
                 GameProcessPaths = (_gameProcessPaths.Text ?? "").Trim(),
-                LauncherProcessPaths = (_launcherProcessPaths.Text ?? "").Trim()
+                LauncherProcessPaths = (_launcherProcessPaths.Text ?? "").Trim(),
+                Hy2Sni = (_hy2Sni.Text ?? "").Trim(),
+                Hy2ObfsType = (_hy2ObfsType.Text ?? "").Trim(),
+                Hy2ObfsPassword = (_hy2ObfsPassword.Text ?? "").Trim(),
+                Nodes = _nodes
             };
             File.WriteAllText(p, JsonSerializer.Serialize(s));
         }
@@ -1466,6 +1982,30 @@ public sealed class DeltaSettings
     public string? LastSeenVersion { get; set; }
     public string? GameProcessPaths { get; set; }
     public string? LauncherProcessPaths { get; set; }
+    public string? Hy2Sni { get; set; }
+    public string? Hy2ObfsType { get; set; }
+    public string? Hy2ObfsPassword { get; set; }
+    public List<Hy2NodeProfile>? Nodes { get; set; }
+}
+
+public sealed class Hy2NodeProfile
+{
+    public string DisplayName { get; set; } = "";
+    public string Server { get; set; } = "";
+    public int Port { get; set; } = 8443;
+    public string Password { get; set; } = "";
+    public string? Sni { get; set; }
+    public string? ObfsType { get; set; }
+    public string? ObfsPassword { get; set; }
+}
+
+public sealed class NodeHealthResult
+{
+    public bool Available { get; set; }
+    public string Grade { get; set; } = "Unavailable";
+    public long AvgRttMs { get; set; }
+    public long JitterMs { get; set; }
+    public string Summary { get; set; } = "";
 }
 
 public sealed class NetRow
