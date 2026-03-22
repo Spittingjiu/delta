@@ -27,7 +27,7 @@ internal static class Program
 
 public sealed class MainForm : Form
 {
-    private const string Version = "G6.34";
+    private const string Version = "G6.36";
     private const string SingBoxVersion = "1.10.3";
     private const string UpdateManifestUrl = "https://delta.zzao.de/latest.json";
     private const string DefaultExeUrlTemplate = "https://delta.zzao.de/releases/Delta v{0}.exe";
@@ -40,34 +40,40 @@ public sealed class MainForm : Form
     {
         Idle,
         CheckingAdmin,
-        CheckingWintun,
-        InstallingWintun,
-        PreparingConfig,
-        StartingSingBox,
+        PreparingWintun,
+        PreparingCore,
+        WritingConfig,
+        StartingCore,
         WaitingTunReady,
         Running,
-        Failed
+        Failed,
+        Stopping
     }
 
     private enum EngineError
     {
         None,
         TunAdminRequired,
-        TunDriverMissing,
-        TunDriverInstallFailed,
-        TunDriverVerifyFailed,
+        TunDownloadFailed,
+        TunHashMismatch,
+        TunDllCopyFailed,
         CoreStartFailed,
         TunCreateFailed,
+        TunCreateTimeout,
         HysteriaHandshakeFailed,
+        NodeUnreachable,
         RouteRuleNotMatched,
-        ConfigGenerateFailed,
+        ConfigWriteFailed,
+        CoreBinaryMissing,
+        CoreCrashed,
+        NodeProbeFailed,
         Unknown
     }
     private static string ReleaseNotes => $@"{Version} 更新内容
 
-- STEP3补强：节点测试增加TLS握手/证书状态校验（含SNI）
-- 服务端一致性检查结果并入诊断日志
-- 运行稳定性细节修复（重启/回滚/诊断状态）";
+- P0补强：TUN状态机改为确定性流转，新增 TunCreateTimeout 等错误码
+- TUN就绪改为“核心日志+进程存活+网卡状态”联合判定
+- 增加全隧道验证模式（final=hy2-out，仅用于排障）";
 
     private readonly ComboBox _processCombo = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 320 };
     private readonly ComboBox _nodeCombo = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 180 };
@@ -115,6 +121,7 @@ public sealed class MainForm : Form
     private string? _latestHy2Url;
     private bool _verboseLogs = false;
     private bool _useTunMode = true;
+    private bool _fullTunnelValidationMode = false;
     private EngineState _engineState = EngineState.Idle;
     private EngineError _lastEngineError = EngineError.None;
     private int _engineRunId = 0;
@@ -124,12 +131,15 @@ public sealed class MainForm : Form
     private string? _lastConfigBackupPath;
     private bool _manualStopping = false;
     private int _autoRestartCount = 0;
+    private readonly List<LogEntry> _recentEngineLogs = new();
+    private readonly List<LogEntry> _recentCoreLogs = new();
+    private readonly List<LogEntry> _recentProbeLogs = new();
 
     private void SetEngineState(EngineState state)
     {
         _engineState = state;
         _engineStatus.Text = "引擎状态：" + state;
-        Log($"[STATE] {state}");
+        LogEngine($"[STATE] {state}");
     }
 
     private void FailEngine(EngineError code, string shortMessage, string? raw = null)
@@ -137,9 +147,9 @@ public sealed class MainForm : Form
         _engineState = EngineState.Failed;
         _lastEngineError = code;
         _engineStatus.Text = "引擎状态：Failed";
-        Log($"[ERR:{code}] {shortMessage}");
+        LogEngine($"[ERR:{code}] {shortMessage}");
         if (!string.IsNullOrWhiteSpace(raw))
-            Log("[RAW] " + raw.Replace("\r", " ").Replace("\n", " | "));
+            LogEngine("[RAW] " + raw.Replace("\r", " ").Replace("\n", " | "));
     }
 
     public MainForm()
@@ -169,6 +179,7 @@ public sealed class MainForm : Form
         var btnNodeImport = new Button { Text = "导入节点", AutoSize = true };
         var btnNodeExport = new Button { Text = "导出节点", AutoSize = true };
         var btnStability = new Button { Text = "稳定性测试(5轮)", AutoSize = true };
+        var btnExportLogs = new Button { Text = "导出日志", AutoSize = true };
         var chkVerbose = new CheckBox { Text = "详细日志", AutoSize = true };
 
         btnRefresh.Click += (_, _) => RefreshProcesses();
@@ -181,6 +192,7 @@ public sealed class MainForm : Form
         btnNodeImport.Click += (_, _) => ImportNodes();
         btnNodeExport.Click += (_, _) => ExportNodes();
         btnStability.Click += async (_, _) => await RunStabilityCyclesAsync(5);
+        btnExportLogs.Click += (_, _) => ExportLogs();
         _nodeCombo.SelectedIndexChanged += (_, _) => ApplySelectedNodeToInputs();
         _profileCombo.SelectedIndexChanged += (_, _) => ApplySelectedProfileTemplate();
         _btnCheckUpdate.Click += async (_, _) => await CheckUpdateAsync(true);
@@ -197,6 +209,7 @@ public sealed class MainForm : Form
         top.Controls.Add(btnNodeImport);
         top.Controls.Add(btnNodeExport);
         top.Controls.Add(btnStability);
+        top.Controls.Add(btnExportLogs);
         top.Controls.Add(new Label { Text = "模板", AutoSize = true, Padding = new Padding(0, 8, 0, 0) });
         top.Controls.Add(_profileCombo);
         top.Controls.Add(btnApply);
@@ -221,6 +234,7 @@ public sealed class MainForm : Form
         var btnPickGame = new Button { Text = "选择游戏EXE", AutoSize = true };
         var btnPickLauncher = new Button { Text = "选择启动器EXE", AutoSize = true };
         var chkTunMode = new CheckBox { Text = "TUN模式(需虚拟网卡)", AutoSize = true, Checked = true };
+        var chkFullTunnelValidation = new CheckBox { Text = "全隧道验证模式", AutoSize = true, Checked = false };
 
         btnEngineStop.Click += (_, _) => StopEngine();
         btnEngineRestart.Click += async (_, _) => await RestartEngineAsync();
@@ -228,6 +242,7 @@ public sealed class MainForm : Form
         btnPickGame.Click += (_, _) => PickExeInto(_gameProcessPaths);
         btnPickLauncher.Click += (_, _) => PickExeInto(_launcherProcessPaths);
         chkTunMode.CheckedChanged += (_, _) => _useTunMode = chkTunMode.Checked;
+        chkFullTunnelValidation.CheckedChanged += (_, _) => _fullTunnelValidationMode = chkFullTunnelValidation.Checked;
 
         cfgPanel.Controls.Add(new Label { Text = "HY2 IP", AutoSize = true, Padding = new Padding(0, 8, 0, 0) });
         cfgPanel.Controls.Add(_hy2Ip);
@@ -247,6 +262,7 @@ public sealed class MainForm : Form
         cfgPanel.Controls.Add(_launcherProcessPaths);
         cfgPanel.Controls.Add(btnPickLauncher);
         cfgPanel.Controls.Add(chkTunMode);
+        cfgPanel.Controls.Add(chkFullTunnelValidation);
         cfgPanel.Controls.Add(btnEngineStop);
         cfgPanel.Controls.Add(btnEngineRestart);
         cfgPanel.Controls.Add(btnNetRepair);
@@ -459,17 +475,17 @@ public sealed class MainForm : Form
 
             if (string.IsNullOrWhiteSpace(ip) || string.IsNullOrWhiteSpace(token))
             {
-                FailEngine(EngineError.ConfigGenerateFailed, "请填写 HY2 IP 和 Token");
+                FailEngine(EngineError.ConfigWriteFailed, "请填写 HY2 IP 和 Token");
                 return false;
             }
             if (!int.TryParse(portTxt, out var port) || port <= 0 || port > 65535)
             {
-                FailEngine(EngineError.ConfigGenerateFailed, "HY2 端口无效");
+                FailEngine(EngineError.ConfigWriteFailed, "HY2 端口无效");
                 return false;
             }
             if (string.IsNullOrWhiteSpace(processName))
             {
-                FailEngine(EngineError.ConfigGenerateFailed, "未指定目标进程");
+                FailEngine(EngineError.ConfigWriteFailed, "未指定目标进程");
                 return false;
             }
 
@@ -484,7 +500,7 @@ public sealed class MainForm : Form
                     return false;
                 }
 
-                SetEngineState(EngineState.CheckingWintun);
+                SetEngineState(EngineState.PreparingWintun);
                 var okTun = await EnsureTunReadyAsync();
                 if (!okTun)
                 {
@@ -495,16 +511,17 @@ public sealed class MainForm : Form
                 await HardCleanupBeforeStartAsync();
             }
 
-            SetEngineState(EngineState.PreparingConfig);
+            SetEngineState(EngineState.PreparingCore);
             var exePath = await EnsureSingBoxAsync();
             _currentTunInterface = BuildTunInterfaceName();
             _currentTunCidr = BuildTunCidr();
+            SetEngineState(EngineState.WritingConfig);
             var cfgPath = await WriteSingBoxConfigAsync(processName, ip, port, token, _currentTunInterface, _currentTunCidr, _useTunMode);
             _lastConfigPath = cfgPath;
 
             StopEngine();
 
-            SetEngineState(EngineState.StartingSingBox);
+            SetEngineState(EngineState.StartingCore);
             var psi = new ProcessStartInfo
             {
                 FileName = exePath,
@@ -520,8 +537,8 @@ public sealed class MainForm : Form
             _engineProc.OutputDataReceived += (_, e) =>
             {
                 if (runId != _engineRunId) return;
-                if (!string.IsNullOrWhiteSpace(e.Data) && _verboseLogs)
-                    BeginInvoke(() => Log($"[RUN#{runId}] SB> " + e.Data));
+                if (!string.IsNullOrWhiteSpace(e.Data))
+                    BeginInvoke(() => LogCore($"[RUN#{runId}] {e.Data}"));
             };
             _engineProc.ErrorDataReceived += (_, e) =>
             {
@@ -529,15 +546,22 @@ public sealed class MainForm : Form
                 if (!string.IsNullOrWhiteSpace(e.Data))
                 {
                     var t = e.Data;
-                    if (t.Contains("FATAL", StringComparison.OrdinalIgnoreCase) || (_verboseLogs && t.Contains("ERROR", StringComparison.OrdinalIgnoreCase)))
-                        BeginInvoke(() => Log($"[RUN#{runId}] SB! " + t));
+                    BeginInvoke(() => LogCore($"[RUN#{runId}] ERR {t}"));
                 }
             };
             _engineProc.Exited += (_, _) => BeginInvoke(async () =>
             {
                 if (runId != _engineRunId) return;
                 var wasRunning = _engineState == EngineState.Running;
-                SetEngineState(wasRunning ? EngineState.Idle : EngineState.Failed);
+                if (wasRunning && !_manualStopping)
+                {
+                    _lastEngineError = EngineError.CoreCrashed;
+                    SetEngineState(EngineState.Failed);
+                }
+                else
+                {
+                    SetEngineState(wasRunning ? EngineState.Idle : EngineState.Failed);
+                }
                 Log($"[RUN#{runId}] 接管引擎已退出");
                 if (!_manualStopping && wasRunning && _autoRestartCount < 2 && !string.IsNullOrWhiteSpace(_activeProcess))
                 {
@@ -559,10 +583,9 @@ public sealed class MainForm : Form
             _engineProc.BeginErrorReadLine();
 
             SetEngineState(EngineState.WaitingTunReady);
-            var ready = await WaitForTunReadyAsync(_useTunMode, _currentTunInterface, 8000);
+            var ready = await WaitForTunReadyAsync(_engineProc, TimeSpan.FromSeconds(8));
             if (!ready)
             {
-                FailEngine(EngineError.TunCreateFailed, "TUN 接口创建失败或超时");
                 try { _engineProc.Kill(true); } catch { }
                 TryRollbackPreviousConfig();
                 return false;
@@ -585,7 +608,8 @@ public sealed class MainForm : Form
         }
         catch (Exception ex)
         {
-            FailEngine(EngineError.Unknown, "接管引擎异常", ex.ToString());
+            var code = ex is FileNotFoundException ? EngineError.CoreBinaryMissing : EngineError.Unknown;
+            FailEngine(code, "接管引擎异常", ex.ToString());
             TryRollbackPreviousConfig();
             return false;
         }
@@ -600,28 +624,61 @@ public sealed class MainForm : Form
     }
 
 
-    private async Task<bool> WaitForTunReadyAsync(bool useTunMode, string tunInterface, int timeoutMs)
+    private async Task<bool> WaitForTunReadyAsync(Process process, TimeSpan timeout)
     {
-        if (!useTunMode) return true;
+        if (!_useTunMode) return true;
 
-        var sw = Stopwatch.StartNew();
-        while (sw.ElapsedMilliseconds < timeoutMs)
+        var startAt = DateTime.UtcNow;
+        while (DateTime.UtcNow - startAt < timeout)
         {
-            var up = NetworkInterface.GetAllNetworkInterfaces().Any(n =>
-                n.Name.Equals(tunInterface, StringComparison.OrdinalIgnoreCase) &&
-                n.OperationalStatus == OperationalStatus.Up);
-            if (up) return true;
-            await Task.Delay(250);
+            if (process == null || process.HasExited)
+            {
+                FailEngine(EngineError.CoreStartFailed, "sing-box 在 TUN 就绪前退出", GetRecentCoreLogsText(30));
+                return false;
+            }
+
+            var recent = GetRecentCoreLogs(60);
+            var tunOkLog = recent.Any(x => x.Contains("tun", StringComparison.OrdinalIgnoreCase) &&
+                                           (x.Contains("created", StringComparison.OrdinalIgnoreCase) ||
+                                            x.Contains("started", StringComparison.OrdinalIgnoreCase) ||
+                                            x.Contains("inbound", StringComparison.OrdinalIgnoreCase) ||
+                                            x.Contains("interface", StringComparison.OrdinalIgnoreCase)));
+
+            if (tunOkLog)
+            {
+                var up = NetworkInterface.GetAllNetworkInterfaces().Any(n =>
+                    n.Name.Equals(_currentTunInterface, StringComparison.OrdinalIgnoreCase) &&
+                    n.OperationalStatus == OperationalStatus.Up);
+                if (up || recent.Any(x => x.Contains(_currentTunInterface, StringComparison.OrdinalIgnoreCase)))
+                    return true;
+            }
+
+            var tunErr = recent.Where(x => x.Contains("tun", StringComparison.OrdinalIgnoreCase) &&
+                                           (x.Contains("error", StringComparison.OrdinalIgnoreCase) ||
+                                            x.Contains("failed", StringComparison.OrdinalIgnoreCase) ||
+                                            x.Contains("cannot", StringComparison.OrdinalIgnoreCase)))
+                               .TakeLast(20)
+                               .ToArray();
+            if (tunErr.Length > 0)
+            {
+                FailEngine(EngineError.TunCreateFailed, "TUN 创建失败", string.Join("\\n", tunErr));
+                return false;
+            }
+
+            await Task.Delay(200);
         }
 
+        FailEngine(EngineError.TunCreateTimeout, "等待 TUN 就绪超时", GetRecentCoreLogsText(30));
         return false;
     }
+
 
     private async Task<bool> EnsureTunReadyAsync()
     {
         try
         {
-            SetEngineState(EngineState.CheckingWintun);
+            _lastTunPrepError = EngineError.None;
+            SetEngineState(EngineState.PreparingWintun);
 
             if (!IsAdmin())
             {
@@ -631,12 +688,12 @@ public sealed class MainForm : Form
                 return false;
             }
 
-            SetEngineState(EngineState.InstallingWintun);
+            SetEngineState(EngineState.PreparingWintun);
             var ok = await EnsureWintunDllReadyAsync();
             if (!ok)
             {
                 Log("[TunDllPrepareFailed] wintun.dll 准备失败");
-                if (_lastTunPrepError == EngineError.None) _lastTunPrepError = EngineError.TunDriverInstallFailed;
+                if (_lastTunPrepError == EngineError.None) _lastTunPrepError = EngineError.TunDownloadFailed;
                 FailEngine(_lastTunPrepError, "wintun.dll 准备失败");
                 MessageBox.Show("wintun.dll 准备失败，已阻止接管启动。", "Delta TUN 前置检查", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return false;
@@ -658,6 +715,7 @@ public sealed class MainForm : Form
         {
             var appDir = GetDataDir();
             var targetDll = Path.Combine(appDir, "wintun.dll");
+            if (File.Exists(targetDll)) return true;
 
             var cacheDir = Path.Combine(appDir, "cache");
             Directory.CreateDirectory(cacheDir);
@@ -673,7 +731,7 @@ public sealed class MainForm : Form
                 }
                 catch (Exception ex)
                 {
-                    _lastTunPrepError = EngineError.TunDriverInstallFailed;
+                    _lastTunPrepError = EngineError.TunDownloadFailed;
                     Log("[TunDownloadFailed] 下载 Wintun 失败: " + ex.Message);
                     return false;
                 }
@@ -681,7 +739,7 @@ public sealed class MainForm : Form
 
             if (!VerifySha256(cachedZip, WintunZipSha256))
             {
-                _lastTunPrepError = EngineError.TunDriverVerifyFailed;
+                _lastTunPrepError = EngineError.TunHashMismatch;
                 Log("[TunHashMismatch] Wintun zip hash 校验失败");
                 return false;
             }
@@ -701,7 +759,7 @@ public sealed class MainForm : Form
 
             if (string.IsNullOrWhiteSpace(dll) || !File.Exists(dll))
             {
-                _lastTunPrepError = EngineError.TunDriverMissing;
+                _lastTunPrepError = EngineError.TunDllCopyFailed;
                 Log("[TunDllPrepareFailed] 压缩包内未找到 bin/amd64/wintun.dll");
                 try { Directory.Delete(tempRoot, true); } catch { }
                 return false;
@@ -715,7 +773,7 @@ public sealed class MainForm : Form
         }
         catch (Exception ex)
         {
-            _lastTunPrepError = EngineError.TunDriverInstallFailed;
+            _lastTunPrepError = EngineError.TunDllCopyFailed;
             Log("[TunDllPrepareFailed] 准备 wintun.dll 异常: " + ex.Message);
             return false;
         }
@@ -840,6 +898,7 @@ public sealed class MainForm : Form
 
     private void StopEngine()
     {
+        SetEngineState(EngineState.Stopping);
         _manualStopping = true;
         try
         {
@@ -956,11 +1015,13 @@ public sealed class MainForm : Form
                                 pass++;
                                 total++;
                                 checks.Add("✅ 目标进程有活跃外网连接，可进入接管路径");
+                                _routeStatus.Text = $"路由观测：MatchedProcess=YES | Mode={( _fullTunnelValidationMode ? "Hy2(全局)" : "Hy2(命中规则)")} | Node={_nodeCombo.Text} | Cfg={_lastConfigPath ?? "-"}";
                             }
                             else
                             {
                                 total++;
                                 _lastEngineError = EngineError.RouteRuleNotMatched;
+                                _routeStatus.Text = $"路由观测：MatchedProcess=NO | Mode=Direct(回退) | Node={_nodeCombo.Text} | Cfg={_lastConfigPath ?? "-"}";
                                 checks.Add("❌ 目标进程暂无活跃外网连接，疑似未命中路由规则");
                             }
                         }
@@ -1248,8 +1309,8 @@ public sealed class MainForm : Form
         var consistency = ValidateClientServerConsistency(node);
         var result = await TestNodeHealthAsync(node);
         _nodeHealthStatus.Text = $"节点健康：{result.Grade} ({result.Summary})";
-        Log($"节点测试[{node.DisplayName}] {result.Summary}");
-        Log(consistency);
+        LogProbe($"节点测试[{node.DisplayName}] {result.Summary}");
+        LogProbe(consistency);
         if (consistency.Contains("FAIL", StringComparison.OrdinalIgnoreCase) || result.Summary.Contains("握手失败", StringComparison.OrdinalIgnoreCase))
             _lastEngineError = EngineError.HysteriaHandshakeFailed;
         UpdateDiagnostics();
@@ -1304,6 +1365,7 @@ public sealed class MainForm : Form
         catch (Exception ex)
         {
             failures.Add("握手失败(TCP/TLS): " + ex.Message);
+            _lastEngineError = EngineError.NodeUnreachable;
         }
 
         try
@@ -1317,6 +1379,7 @@ public sealed class MainForm : Form
         catch (Exception ex)
         {
             failures.Add("UDP不可达: " + ex.Message);
+            if (_lastEngineError == EngineError.None) _lastEngineError = EngineError.NodeProbeFailed;
         }
 
         var avg = rtts.Count == 0 ? -1 : (long)rtts.Average();
@@ -1544,6 +1607,7 @@ public sealed class MainForm : Form
 
         // 优先 process_path（游戏）
         var gameRulePaths = gamePaths.Where(x => x.Contains('\\') || x.Contains('/')).ToArray();
+        var gamePathRegex = gameRulePaths.Select(x => "^" + Regex.Escape(x).Replace("\\\\", "[/\\\\]") + "$").ToArray();
         if (gameRulePaths.Length > 0)
         {
             rules.Add(new
@@ -1552,15 +1616,28 @@ public sealed class MainForm : Form
                 action = "route",
                 outbound = "hy2-out"
             });
+            rules.Add(new
+            {
+                process_path_regex = gamePathRegex,
+                action = "route",
+                outbound = "hy2-out"
+            });
         }
 
         // 启动器路径
         var launcherRulePaths = launcherPaths.Where(x => x.Contains('\\') || x.Contains('/')).ToArray();
+        var launcherPathRegex = launcherRulePaths.Select(x => "^" + Regex.Escape(x).Replace("\\\\", "[/\\\\]") + "$").ToArray();
         if (launcherRulePaths.Length > 0)
         {
             rules.Add(new
             {
                 process_path = launcherRulePaths,
+                action = "route",
+                outbound = "hy2-out"
+            });
+            rules.Add(new
+            {
+                process_path_regex = launcherPathRegex,
                 action = "route",
                 outbound = "hy2-out"
             });
@@ -1589,6 +1666,8 @@ public sealed class MainForm : Form
             action = "route",
             outbound = "hy2-out"
         });
+
+        var useValidationMode = _fullTunnelValidationMode;
 
         object cfg;
         if (useTunMode)
@@ -1627,8 +1706,8 @@ public sealed class MainForm : Form
                 route = new
                 {
                     auto_detect_interface = true,
-                    rules = rules,
-                    final = "direct"
+                    rules = useValidationMode ? Array.Empty<object>() : rules.ToArray(),
+                    final = useValidationMode ? "hy2-out" : "direct"
                 }
             };
         }
@@ -1657,8 +1736,8 @@ public sealed class MainForm : Form
                 },
                 route = new
                 {
-                    rules = rules,
-                    final = "direct"
+                    rules = useValidationMode ? Array.Empty<object>() : rules.ToArray(),
+                    final = useValidationMode ? "hy2-out" : "direct"
                 }
             };
         }
@@ -1670,15 +1749,29 @@ public sealed class MainForm : Form
         }
 
         var text = JsonSerializer.Serialize(cfg, new JsonSerializerOptions { WriteIndented = true });
-        await File.WriteAllTextAsync(cfgPath, text);
+        try
+        {
+            await File.WriteAllTextAsync(cfgPath, text);
+        }
+        catch (Exception ex)
+        {
+            FailEngine(EngineError.ConfigWriteFailed, "配置写入失败", ex.ToString());
+            throw;
+        }
 
-        _routeStatus.Text = $"路由：{rules.Count}条规则，final=direct";
+        _routeStatus.Text = useValidationMode ? "路由：全隧道验证模式(final=hy2-out)" : $"路由：{rules.Count}条规则，final=direct";
+        var modeTxt = useValidationMode ? "Hy2(全局)" : "Direct(默认)+Hy2(命中规则)";
         Log($"已写入接管配置: {cfgPath}");
         Log($"规则(游戏路径): {string.Join(" | ", gameRulePaths)}");
         if (launcherRulePaths.Length > 0)
             Log($"规则(启动器路径): {string.Join(" | ", launcherRulePaths)}");
         Log($"规则(名称回退): {string.Join(",", nameFallback)} -> hy2-out");
-        Log("回退保护：未匹配流量走 direct");
+        Log($"路由观测: MatchedProcess=未知, CurrentMode={modeTxt}, ActiveNode={_nodeCombo.Text}, Config={cfgPath}");
+        if (useValidationMode)
+            Log("验证模式：全流量走 hy2-out（仅排障使用）");
+        else
+            Log("回退保护：未匹配流量走 direct");
+        Log($"当前路由模式: {(useValidationMode ? "FullTunnelValidation" : "PerProcess")} ");
         if (useTunMode)
         {
             Log($"TUN 接口名: {tunInterface}");
@@ -1951,6 +2044,51 @@ public sealed class MainForm : Form
         catch { }
     }
 
+    private void LogEngine(string msg) => LogEx("INFO", "engine", msg, _recentEngineLogs);
+    private void LogCore(string msg) => LogEx("INFO", "core", msg, _recentCoreLogs);
+    private void LogProbe(string msg) => LogEx("INFO", "probe", msg, _recentProbeLogs);
+
+    private void LogEx(string level, string source, string msg, List<LogEntry> bucket)
+    {
+        var e = new LogEntry { Time = DateTime.Now, Level = level, Source = source, Message = msg };
+        bucket.Add(e);
+        if (bucket.Count > 200) bucket.RemoveRange(0, bucket.Count - 200);
+        Log($"[{source}] {msg}");
+    }
+
+    private List<string> GetRecentCoreLogs(int n)
+    {
+        if (_recentCoreLogs.Count == 0) return new List<string>();
+        return _recentCoreLogs.Skip(Math.Max(0, _recentCoreLogs.Count - n)).Select(x => x.Message).ToList();
+    }
+
+    private string GetRecentCoreLogsText(int n)
+    {
+        return string.Join("\n", GetRecentCoreLogs(n));
+    }
+
+    private void ExportLogs()
+    {
+        using var sfd = new SaveFileDialog { Filter = "Delta Logs|*.log", FileName = $"delta-{DateTime.Now:yyyyMMdd-HHmmss}.log" };
+        if (sfd.ShowDialog() != DialogResult.OK) return;
+        try
+        {
+            var lines = new List<string>();
+            lines.Add("=== ENGINE ===");
+            lines.AddRange(_recentEngineLogs.Select(x => x.ToString()));
+            lines.Add("=== CORE ===");
+            lines.AddRange(_recentCoreLogs.Select(x => x.ToString()));
+            lines.Add("=== PROBE ===");
+            lines.AddRange(_recentProbeLogs.Select(x => x.ToString()));
+            File.WriteAllLines(sfd.FileName, lines);
+            Log($"日志已导出: {sfd.FileName}");
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show("导出日志失败: " + ex.Message, "导出日志", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+    }
+
     private void Log(string msg)
     {
         if (IsDisposed) return;
@@ -1974,6 +2112,15 @@ public sealed class MainForm : Form
     }
 }
 
+public sealed class LogEntry
+{
+    public DateTime Time { get; set; }
+    public string Level { get; set; } = "";
+    public string Source { get; set; } = "";
+    public string Message { get; set; } = "";
+    public override string ToString() => $"[{Time:HH:mm:ss}] [{Level}] [{Source}] {Message}";
+}
+
 public sealed class DeltaSettings
 {
     public string? Hy2Server { get; set; }
@@ -1986,6 +2133,13 @@ public sealed class DeltaSettings
     public string? Hy2ObfsType { get; set; }
     public string? Hy2ObfsPassword { get; set; }
     public List<Hy2NodeProfile>? Nodes { get; set; }
+}
+
+public sealed class GameProfile
+{
+    public string Name { get; set; } = "Default";
+    public List<string> ProcessPaths { get; set; } = new();
+    public List<string> ProcessNames { get; set; } = new();
 }
 
 public sealed class Hy2NodeProfile
