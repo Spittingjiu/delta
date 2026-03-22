@@ -27,7 +27,7 @@ internal static class Program
 
 public sealed class MainForm : Form
 {
-    private const string Version = "G6.49";
+    private const string Version = "G6.50";
     private const string SingBoxVersion = "1.13.3";
     private const string UpdateManifestUrl = "https://delta.zzao.de/latest.json";
     private const string DefaultExeUrlTemplate = "https://delta.zzao.de/releases/Delta v{0}.exe";
@@ -79,8 +79,8 @@ public sealed class MainForm : Form
     }
     private static string ReleaseNotes => $@"{Version} 更新内容
 
-- 修复转发时卡顿：降低核心日志刷屏、日志面板刷新节流
-- 启动与转发阶段默认只保留关键日志（详细日志可手动打开）";
+- 修复卡顿：日志渲染进一步降载（隐藏日志窗口时不实时追加）
+- 增强可观测：TUN模式下同时开放 mixed 入站，代理探针可直接验证是否走代理";
 
     private readonly ComboBox _processCombo = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 320 };
     private readonly ComboBox _nodeCombo = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 180 };
@@ -2019,7 +2019,8 @@ public sealed class MainForm : Form
                         strict_route = TemplateTunStrictRoute(),
                         stack = "system",
                         sniff = TemplateTunSniff()
-                    }
+                    },
+                    new { type = "mixed", tag = "mixed-in", listen = "127.0.0.1", listen_port = 10809 }
                 },
                 outbounds = new object[]
                 {
@@ -2251,7 +2252,7 @@ public sealed class MainForm : Form
             var direct = await QueryPublicIpAsync(false);
             var proxy = await QueryPublicIpAsync(true);
             _ipDirect.Text = string.IsNullOrWhiteSpace(direct) ? "直连IP：-" : $"直连IP：{direct}";
-            _ipProxy.Text = string.IsNullOrWhiteSpace(proxy) ? "代理IP：-" : $"代理IP：{proxy}";
+            _ipProxy.Text = string.IsNullOrWhiteSpace(proxy) ? "代理IP：-（未命中/未连通）" : $"代理IP：{proxy}";
             Log($"IP探针：直连={direct ?? "-"} / 代理={proxy ?? "-"}");
         }
         catch (Exception ex)
@@ -2538,14 +2539,18 @@ public sealed class MainForm : Form
         }
 
         var line = $"[{DateTime.Now:HH:mm:ss}] {msg}\r\n";
-        _log.AppendText(line);
-
-        const int maxChars = 200000;
-        if (_log.TextLength > maxChars)
+        var important = msg.Contains("错误") || msg.Contains("失败") || msg.Contains("WARN", StringComparison.OrdinalIgnoreCase) || msg.Contains("ERROR", StringComparison.OrdinalIgnoreCase) || msg.Contains("FATAL", StringComparison.OrdinalIgnoreCase);
+        if (_verboseLogs || important)
         {
-            _log.Text = _log.Text[^maxChars..];
-            _log.SelectionStart = _log.TextLength;
-            _log.ScrollToCaret();
+            _log.AppendText(line);
+
+            const int maxChars = 120000;
+            if (_log.TextLength > maxChars)
+            {
+                _log.Text = _log.Text[^maxChars..];
+                _log.SelectionStart = _log.TextLength;
+                _log.ScrollToCaret();
+            }
         }
     }
 }
