@@ -27,12 +27,13 @@ internal static class Program
 
 public sealed class MainForm : Form
 {
-    private const string Version = "G6.40";
+    private const string Version = "G6.41";
     private const string SingBoxVersion = "1.13.3";
     private const string UpdateManifestUrl = "https://delta.zzao.de/latest.json";
     private const string DefaultExeUrlTemplate = "https://delta.zzao.de/releases/Delta v{0}.exe";
     private const string DefaultSingBoxUrl = "https://delta.zzao.de/releases/sing-box.exe";
     private const string DefaultHy2Url = "https://delta.zzao.de/releases/hy2-client.exe";
+    private const string Hy2Version = "20250307";
     private const string WintunZipUrl = "https://www.wintun.net/builds/wintun-0.14.1.zip";
     private const string WintunZipSha256 = "07c256185d6ee3652e09fa55c0b673e2624b565e02c4b9091c79ca7d2f24ef51";
 
@@ -93,6 +94,7 @@ public sealed class MainForm : Form
     private readonly Label _routeStatus = new() { AutoSize = true, Text = "路由：-" };
     private readonly Label _diagStatus = new() { AutoSize = true, Text = "诊断：-" };
     private readonly Label _nodeHealthStatus = new() { AutoSize = true, Text = "节点健康：未测试" };
+    private readonly Label _coreVersionsStatus = new() { AutoSize = true, Text = "核心：sing-box v1.13.3 | hy2 20250307" };
     private readonly Label _ipDirect = new() { AutoSize = true, Text = "直连IP：-" };
     private readonly Label _ipProxy = new() { AutoSize = true, Text = "代理IP：-" };
     private readonly Label _quickSummary = new() { AutoSize = true, Text = "[未运行] | 节点:- | 模式:稳定 | 游戏:- | 路由:直连" };
@@ -142,6 +144,8 @@ public sealed class MainForm : Form
     private string? _latestExeFileName;
     private string? _latestSingBoxUrl;
     private string? _latestHy2Url;
+    private string? _latestSingBoxVersion;
+    private string? _latestHy2Version;
     private bool _verboseLogs = false;
     private bool _useTunMode = true;
     private bool _fullTunnelValidationMode = false;
@@ -409,6 +413,8 @@ public sealed class MainForm : Form
         verifyPanel.Controls.Add(_verifyStatus);
         verifyPanel.Controls.Add(new Label { Text = "   " });
         verifyPanel.Controls.Add(_updateStatus);
+        verifyPanel.Controls.Add(new Label { Text = "   " });
+        verifyPanel.Controls.Add(_coreVersionsStatus);
         verifyPanel.Controls.Add(new Label { Text = "   " });
         verifyPanel.Controls.Add(_routeStatus);
         verifyPanel.Controls.Add(new Label { Text = "   " });
@@ -2106,14 +2112,27 @@ public sealed class MainForm : Form
             _latestSingBoxUrl = string.IsNullOrWhiteSpace(m.singBoxUrl) ? DefaultSingBoxUrl : m.singBoxUrl.Trim();
             _latestHy2Url = string.IsNullOrWhiteSpace(m.hy2Url) ? DefaultHy2Url : m.hy2Url.Trim();
 
-            if (IsNewerVersion(_latestVersion, Version))
+            _latestSingBoxVersion = string.IsNullOrWhiteSpace(m.singBoxVersion) ? ParseVersionFromUrl(_latestSingBoxUrl, "sing-box") : m.singBoxVersion.Trim();
+            _latestHy2Version = string.IsNullOrWhiteSpace(m.hy2Version) ? ParseVersionFromUrl(_latestHy2Url, "hy2-client") : m.hy2Version.Trim();
+
+            var appNeed = IsNewerVersion(_latestVersion, Version);
+            var sbNeed = VersionChanged(_latestSingBoxVersion, SingBoxVersion);
+            var hyNeed = VersionChanged(_latestHy2Version, Hy2Version);
+
+            _coreVersionsStatus.Text = $"核心：sing-box v{SingBoxVersion}→v{(_latestSingBoxVersion ?? "?")} | hy2 {Hy2Version}→{(_latestHy2Version ?? "?")}";
+
+            if (appNeed || sbNeed || hyNeed)
             {
-                _updateStatus.Text = $"更新：发现新版本 {_latestVersion}";
-                _btnUpdate.Text = $"一键更新到 {_latestVersion}";
+                var parts = new List<string>();
+                if (appNeed) parts.Add($"程序 {_latestVersion}");
+                if (sbNeed) parts.Add($"sing-box v{_latestSingBoxVersion}");
+                if (hyNeed) parts.Add($"hy2 {_latestHy2Version}");
+                _updateStatus.Text = "更新：发现 " + string.Join(" / ", parts);
+                _btnUpdate.Text = "一键更新（程序+核心）";
                 _btnUpdate.Enabled = true;
-                Log($"发现新版本：{_latestVersion}");
+                Log("发现更新: " + _updateStatus.Text);
                 if (manual)
-                    MessageBox.Show($"发现新版本：{_latestVersion}", "检查更新", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    MessageBox.Show(_updateStatus.Text, "检查更新", MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
             else
             {
@@ -2121,7 +2140,7 @@ public sealed class MainForm : Form
                 _btnUpdate.Text = "一键更新";
                 _btnUpdate.Enabled = false;
                 if (manual)
-                    MessageBox.Show("当前已是最新版本。", "检查更新", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    MessageBox.Show("当前已是最新版本（程序 + 核心）。", "检查更新", MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
         }
         catch (Exception ex)
@@ -2137,6 +2156,7 @@ public sealed class MainForm : Form
             _btnCheckUpdate.Enabled = true;
         }
     }
+
 
     private async Task UpdateToLatestAsync()
     {
@@ -2159,48 +2179,28 @@ public sealed class MainForm : Form
             var targetExePath = Path.Combine(currentDir, newExeName);
 
             var hasTargetExe = File.Exists(targetExePath);
-            var hasSingBox = File.Exists(Path.Combine(currentDir, "sing-box.exe"));
-            var hasHy2 = File.Exists(Path.Combine(currentDir, "hy2-client.exe"));
 
-            if (hasTargetExe && hasSingBox && hasHy2)
-            {
-                Log($"检测到 {newExeName} + sing-box.exe + hy2-client.exe 已存在，跳过下载。");
-                MessageBox.Show($"当前目录已存在 {newExeName}、sing-box.exe、hy2-client.exe。\n无需重复下载。", "Delta 更新", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                return;
-            }
-
-            Log($"开始一键更新：下载 {newExeName} ...");
+            Log($"开始一键更新：目标 {newExeName} + 最新核心...");
             using var http = new HttpClient { Timeout = TimeSpan.FromMinutes(5) };
 
             var exeBytes = await http.GetByteArrayAsync(_latestExeUrl!);
             await File.WriteAllBytesAsync(targetExePath, exeBytes);
 
-            if (!hasSingBox)
-            {
-                Log("缺少 sing-box.exe，开始补齐...");
-                var singUrl = string.IsNullOrWhiteSpace(_latestSingBoxUrl) ? DefaultSingBoxUrl : _latestSingBoxUrl!;
-                var singBytes = await http.GetByteArrayAsync(singUrl);
-                await File.WriteAllBytesAsync(Path.Combine(currentDir, "sing-box.exe"), singBytes);
-            }
-            else
-            {
-                Log("已存在 sing-box.exe，跳过下载。");
-            }
+            var singUrl = string.IsNullOrWhiteSpace(_latestSingBoxUrl) ? DefaultSingBoxUrl : _latestSingBoxUrl!;
+            var hy2Url = string.IsNullOrWhiteSpace(_latestHy2Url) ? DefaultHy2Url : _latestHy2Url!;
 
-            if (!hasHy2)
-            {
-                Log("缺少 hy2-client.exe，开始补齐...");
-                var hy2Url = string.IsNullOrWhiteSpace(_latestHy2Url) ? DefaultHy2Url : _latestHy2Url!;
-                var hy2Bytes = await http.GetByteArrayAsync(hy2Url);
-                await File.WriteAllBytesAsync(Path.Combine(currentDir, "hy2-client.exe"), hy2Bytes);
-            }
-            else
-            {
-                Log("已存在 hy2-client.exe，跳过下载。");
-            }
+            Log("下载最新 sing-box.exe ...");
+            var singBytes = await http.GetByteArrayAsync(singUrl);
+            await File.WriteAllBytesAsync(Path.Combine(currentDir, "sing-box.exe"), singBytes);
 
-            Log($"更新完成：已更新到 {verText}。{newExeName} 已就位。");
-            MessageBox.Show($"更新完成。\n目标版本：{verText}\n已写入当前目录。\n请关闭当前程序后启动 {newExeName}。", "Delta 更新", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            Log("下载最新 hy2-client.exe ...");
+            var hy2Bytes = await http.GetByteArrayAsync(hy2Url);
+            await File.WriteAllBytesAsync(Path.Combine(currentDir, "hy2-client.exe"), hy2Bytes);
+
+            _coreVersionsStatus.Text = $"核心：sing-box v{_latestSingBoxVersion ?? "?"} | hy2 {_latestHy2Version ?? "?"}";
+
+            Log($"更新完成：程序 {verText} + sing-box v{_latestSingBoxVersion ?? "?"} + hy2 {_latestHy2Version ?? "?"}");
+            MessageBox.Show($"更新完成。\n程序版本：{verText}\nsing-box：v{_latestSingBoxVersion ?? "?"}\nhy2：{_latestHy2Version ?? "?"}\n请关闭当前程序后启动 {newExeName}。", "Delta 更新", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
         catch (Exception ex)
         {
@@ -2248,6 +2248,25 @@ public sealed class MainForm : Form
         }
 
         return null;
+    }
+
+    private static string? ParseVersionFromUrl(string? url, string prefix)
+    {
+        if (string.IsNullOrWhiteSpace(url)) return null;
+        var file = Path.GetFileName(url);
+        if (string.IsNullOrWhiteSpace(file)) return null;
+
+        var m = Regex.Match(file, $@"{Regex.Escape(prefix)}-([0-9]+(?:\.[0-9]+)*)", RegexOptions.IgnoreCase);
+        if (m.Success) return m.Groups[1].Value;
+
+        m = Regex.Match(file, "([0-9]+(?:\\.[0-9]+){0,3})");
+        return m.Success ? m.Groups[1].Value : null;
+    }
+
+    private static bool VersionChanged(string? remote, string local)
+    {
+        if (string.IsNullOrWhiteSpace(remote)) return false;
+        return !string.Equals(remote.Trim(), local.Trim(), StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool IsNewerVersion(string remote, string local)
@@ -2496,7 +2515,9 @@ public sealed class UpdateManifest
     public string? exeUrl { get; set; }
     public string? exeFileName { get; set; }
     public string? singBoxUrl { get; set; }
+    public string? singBoxVersion { get; set; }
     public string? hy2Url { get; set; }
+    public string? hy2Version { get; set; }
     public string? notes { get; set; }
     public string? publishedAt { get; set; }
 }
