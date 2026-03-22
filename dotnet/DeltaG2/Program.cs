@@ -27,7 +27,7 @@ internal static class Program
 
 public sealed class MainForm : Form
 {
-    private const string Version = "G6.51";
+    private const string Version = "G6.52";
     private const string SingBoxVersion = "1.13.3";
     private const string UpdateManifestUrl = "https://delta.zzao.de/latest.json";
     private const string DefaultExeUrlTemplate = "https://delta.zzao.de/releases/Delta v{0}.exe";
@@ -701,7 +701,7 @@ public sealed class MainForm : Form
             try
             {
                 if (!Directory.Exists(f)) continue;
-                var exes = Directory.GetFiles(f, "*.exe", SearchOption.TopDirectoryOnly);
+                var exes = Directory.GetFiles(f, "*.exe", SearchOption.AllDirectories);
                 result.AddRange(exes);
             }
             catch { }
@@ -1402,7 +1402,7 @@ public sealed class MainForm : Form
         foreach (var f in folders)
         {
             var count = 0;
-            try { if (Directory.Exists(f)) count = Directory.GetFiles(f, "*.exe", SearchOption.TopDirectoryOnly).Length; } catch { }
+            try { if (Directory.Exists(f)) count = Directory.GetFiles(f, "*.exe", SearchOption.AllDirectories).Length; } catch { }
             _gameList.Items.Add($"{Path.GetFileName(f)}  ({count} 个EXE)");
         }
     }
