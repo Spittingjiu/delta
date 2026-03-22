@@ -23,7 +23,7 @@ internal static class Program
 
 public sealed class MainForm : Form
 {
-    private const string Version = "G6.26";
+    private const string Version = "G6.29";
     private const string SingBoxVersion = "1.10.3";
     private const string UpdateManifestUrl = "https://delta.zzao.de/latest.json";
     private const string DefaultExeUrlTemplate = "https://delta.zzao.de/releases/Delta v{0}.exe";
@@ -31,12 +31,36 @@ public sealed class MainForm : Form
     private const string DefaultHy2Url = "https://delta.zzao.de/releases/hy2-client.exe";
     private const string WintunZipUrl = "https://www.wintun.net/builds/wintun-0.14.1.zip";
     private const string WintunZipSha256 = "07c256185d6ee3652e09fa55c0b673e2624b565e02c4b9091c79ca7d2f24ef51";
+
+    private enum EngineState
+    {
+        Idle,
+        CheckingAdmin,
+        CheckingWintun,
+        InstallingWintun,
+        PreparingConfig,
+        StartingSingBox,
+        WaitingTunReady,
+        Running,
+        Failed
+    }
+
+    private enum EngineError
+    {
+        None,
+        AdminRequired,
+        WintunCheckFailed,
+        WintunInstallFailed,
+        ConfigGenerateFailed,
+        CoreStartFailed,
+        TunCreateFailed,
+        Unknown
+    }
     private static string ReleaseNotes => $@"{Version} 更新内容
 
-- P0: 驱动判定改为 pnputil 驱动仓库检查（不再看网卡）
-- P0: 去掉安装后 Delay，改为安装后即时复检 driver
-- P0: 增加管理员权限检测，不满足直接阻断
-- P1: Wintun 安装使用 temp 目录 + SHA256 校验 + 本地缓存";
+- 移除 INF/pnputil 驱动安装流程
+- 改为仅准备 wintun.dll（从 wintun zip 解压 bin/amd64/wintun.dll 到程序目录）
+- 以 sing-box TUN 创建成功/失败作为唯一接管判定信号";
 
     private readonly ComboBox _processCombo = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 320 };
     private readonly Label _status = new() { AutoSize = true, Text = "状态：未接管" };
@@ -74,6 +98,26 @@ public sealed class MainForm : Form
     private string? _latestHy2Url;
     private bool _verboseLogs = false;
     private bool _useTunMode = true;
+    private EngineState _engineState = EngineState.Idle;
+    private EngineError _lastEngineError = EngineError.None;
+    private int _engineRunId = 0;
+
+    private void SetEngineState(EngineState state)
+    {
+        _engineState = state;
+        _engineStatus.Text = "引擎状态：" + state;
+        Log($"[STATE] {state}");
+    }
+
+    private void FailEngine(EngineError code, string shortMessage, string? raw = null)
+    {
+        _engineState = EngineState.Failed;
+        _lastEngineError = code;
+        _engineStatus.Text = "引擎状态：Failed";
+        Log($"[ERR:{code}] {shortMessage}");
+        if (!string.IsNullOrWhiteSpace(raw))
+            Log("[RAW] " + raw.Replace("\r", " ").Replace("\n", " | "));
+    }
 
     public MainForm()
     {
@@ -125,10 +169,12 @@ public sealed class MainForm : Form
         };
 
         var btnEngineStop = new Button { Text = "停止接管引擎", AutoSize = true };
+        var btnEngineRestart = new Button { Text = "重启接管引擎", AutoSize = true };
         var btnNetRepair = new Button { Text = "一键网络修复", AutoSize = true };
         var chkTunMode = new CheckBox { Text = "TUN模式(需虚拟网卡)", AutoSize = true, Checked = true };
 
         btnEngineStop.Click += (_, _) => StopEngine();
+        btnEngineRestart.Click += async (_, _) => await RestartEngineAsync();
         btnNetRepair.Click += async (_, _) => await RepairNetworkAsync();
         chkTunMode.CheckedChanged += (_, _) => _useTunMode = chkTunMode.Checked;
 
@@ -140,6 +186,7 @@ public sealed class MainForm : Form
         cfgPanel.Controls.Add(_hy2Token);
         cfgPanel.Controls.Add(chkTunMode);
         cfgPanel.Controls.Add(btnEngineStop);
+        cfgPanel.Controls.Add(btnEngineRestart);
         cfgPanel.Controls.Add(btnNetRepair);
 
         var statusPanel = new FlowLayoutPanel
@@ -266,6 +313,24 @@ public sealed class MainForm : Form
         await RefreshIpProbeAsync();
     }
 
+    private async Task RestartEngineAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_activeProcess))
+        {
+            MessageBox.Show("当前没有已选择的目标进程。请先点开始接管。", "Delta 提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        Log("执行引擎重启...");
+        StopEngine();
+        var ok = await StartEngineAsync(_activeProcess);
+        if (ok)
+        {
+            _status.Text = $"状态：接管策略已启用（{_activeProcess}）";
+            await VerifyTakeoverAsync();
+        }
+    }
+
     private void Rollback()
     {
         _activeProcess = null;
@@ -279,24 +344,28 @@ public sealed class MainForm : Form
     {
         try
         {
+            _engineRunId++;
+            var runId = _engineRunId;
+            _lastEngineError = EngineError.None;
+            SetEngineState(EngineState.Idle);
+
             var ip = (_hy2Ip.Text ?? "").Trim();
             var token = (_hy2Token.Text ?? "").Trim();
             var portTxt = (_hy2Port.Text ?? "8443").Trim();
 
             if (string.IsNullOrWhiteSpace(ip) || string.IsNullOrWhiteSpace(token))
             {
-                Log("启动失败：请填写 HY2 IP 和 Token");
+                FailEngine(EngineError.ConfigGenerateFailed, "请填写 HY2 IP 和 Token");
                 return false;
             }
             if (!int.TryParse(portTxt, out var port) || port <= 0 || port > 65535)
             {
-                Log("启动失败：HY2 端口无效");
+                FailEngine(EngineError.ConfigGenerateFailed, "HY2 端口无效");
                 return false;
             }
-
             if (string.IsNullOrWhiteSpace(processName))
             {
-                Log("启动失败：未指定目标进程");
+                FailEngine(EngineError.ConfigGenerateFailed, "未指定目标进程");
                 return false;
             }
 
@@ -304,15 +373,25 @@ public sealed class MainForm : Form
 
             if (_useTunMode)
             {
+                SetEngineState(EngineState.CheckingAdmin);
+                if (!IsAdmin())
+                {
+                    FailEngine(EngineError.AdminRequired, "需要管理员权限");
+                    return false;
+                }
+
+                SetEngineState(EngineState.CheckingWintun);
                 var okTun = await EnsureTunReadyAsync();
                 if (!okTun)
                 {
                     _status.Text = "状态：接管失败（TUN未就绪）";
                     return false;
                 }
+
                 await HardCleanupBeforeStartAsync();
             }
 
+            SetEngineState(EngineState.PreparingConfig);
             var exePath = await EnsureSingBoxAsync();
             _currentTunInterface = BuildTunInterfaceName();
             _currentTunCidr = BuildTunCidr();
@@ -320,6 +399,7 @@ public sealed class MainForm : Form
 
             StopEngine();
 
+            SetEngineState(EngineState.StartingSingBox);
             var psi = new ProcessStartInfo
             {
                 FileName = exePath,
@@ -332,34 +412,60 @@ public sealed class MainForm : Form
             };
 
             _engineProc = new Process { StartInfo = psi, EnableRaisingEvents = true };
-            _engineProc.OutputDataReceived += (_, e) => { if (!string.IsNullOrWhiteSpace(e.Data) && _verboseLogs) BeginInvoke(() => Log("SB> " + e.Data)); };
-            _engineProc.ErrorDataReceived += (_, e) => { if (!string.IsNullOrWhiteSpace(e.Data)) { var t=e.Data; if (t.Contains("FATAL", StringComparison.OrdinalIgnoreCase) || (_verboseLogs && t.Contains("ERROR", StringComparison.OrdinalIgnoreCase))) BeginInvoke(() => Log("SB! " + t)); } };
+            _engineProc.OutputDataReceived += (_, e) =>
+            {
+                if (runId != _engineRunId) return;
+                if (!string.IsNullOrWhiteSpace(e.Data) && _verboseLogs)
+                    BeginInvoke(() => Log($"[RUN#{runId}] SB> " + e.Data));
+            };
+            _engineProc.ErrorDataReceived += (_, e) =>
+            {
+                if (runId != _engineRunId) return;
+                if (!string.IsNullOrWhiteSpace(e.Data))
+                {
+                    var t = e.Data;
+                    if (t.Contains("FATAL", StringComparison.OrdinalIgnoreCase) || (_verboseLogs && t.Contains("ERROR", StringComparison.OrdinalIgnoreCase)))
+                        BeginInvoke(() => Log($"[RUN#{runId}] SB! " + t));
+                }
+            };
             _engineProc.Exited += (_, _) => BeginInvoke(() =>
             {
-                _engineStatus.Text = "引擎：已停止";
-                Log("接管引擎已退出");
+                if (runId != _engineRunId) return;
+                if (_engineState != EngineState.Running)
+                    SetEngineState(EngineState.Failed);
+                else
+                    SetEngineState(EngineState.Idle);
+                Log($"[RUN#{runId}] 接管引擎已退出");
             });
 
             if (!_engineProc.Start())
             {
-                Log("接管引擎启动失败");
+                FailEngine(EngineError.CoreStartFailed, "接管引擎启动失败");
                 return false;
             }
             _engineProc.BeginOutputReadLine();
             _engineProc.BeginErrorReadLine();
 
-            _engineStatus.Text = "引擎：已启动（TUN 接管中）";
-            Log("接管引擎已启动");
-            await Task.Delay(1200);
+            SetEngineState(EngineState.WaitingTunReady);
+            var ready = await WaitForTunReadyAsync(_useTunMode, _currentTunInterface, 8000);
+            if (!ready)
+            {
+                FailEngine(EngineError.TunCreateFailed, "TUN 接口创建失败或超时");
+                try { _engineProc.Kill(true); } catch { }
+                return false;
+            }
+
+            SetEngineState(EngineState.Running);
+            Log($"[RUN#{runId}] 接管引擎已启动");
             return true;
         }
         catch (Exception ex)
         {
-            _engineStatus.Text = "引擎：启动异常";
-            Log("接管引擎异常: " + ex.Message);
+            FailEngine(EngineError.Unknown, "接管引擎异常", ex.ToString());
             return false;
         }
     }
+
 
     private sealed class CmdResult
     {
@@ -368,55 +474,47 @@ public sealed class MainForm : Form
         public string StdErr { get; set; } = "";
     }
 
-    private enum TunError
+
+    private async Task<bool> WaitForTunReadyAsync(bool useTunMode, string tunInterface, int timeoutMs)
     {
-        None,
-        TunAdminRequired,
-        TunDriverNotFound,
-        TunDownloadFailed,
-        TunHashMismatch,
-        TunDriverInstallFailed,
-        TunDriverVerifyFailed,
-        TunUnknownError
+        if (!useTunMode) return true;
+
+        var sw = Stopwatch.StartNew();
+        while (sw.ElapsedMilliseconds < timeoutMs)
+        {
+            var up = NetworkInterface.GetAllNetworkInterfaces().Any(n =>
+                n.Name.Equals(tunInterface, StringComparison.OrdinalIgnoreCase) &&
+                n.OperationalStatus == OperationalStatus.Up);
+            if (up) return true;
+            await Task.Delay(250);
+        }
+
+        return false;
     }
 
     private async Task<bool> EnsureTunReadyAsync()
     {
         try
         {
+            SetEngineState(EngineState.CheckingWintun);
+
             if (!IsAdmin())
             {
                 Log("[TunAdminRequired] 当前非管理员权限，阻断接管");
-                MessageBox.Show("需要管理员权限才能安装/启用 TUN 驱动。\n请右键以管理员身份运行 Delta。", "Delta TUN 前置检查", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                MessageBox.Show("需要管理员权限才能启用 TUN。\n请右键以管理员身份运行 Delta。", "Delta TUN 前置检查", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return false;
             }
 
-            var check = await IsWintunDriverInstalledAsync();
-            if (check.installed)
+            SetEngineState(EngineState.InstallingWintun);
+            var ok = await EnsureWintunDllReadyAsync();
+            if (!ok)
             {
-                Log("TUN前置检查通过：检测到 Wintun 驱动已安装");
-                return true;
-            }
-
-            Log("未检测到 Wintun 驱动，开始安装...");
-            var okInstall = await InstallWintunAsync();
-            if (!okInstall)
-            {
-                Log("[TunDriverInstallFailed] Wintun 安装失败");
-                MessageBox.Show("未检测到可用 Wintun 驱动，且自动安装失败。", "Delta TUN 前置检查", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                Log("[TunDllPrepareFailed] wintun.dll 准备失败");
+                MessageBox.Show("wintun.dll 准备失败，已阻止接管启动。", "Delta TUN 前置检查", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return false;
             }
 
-            // 安装后立即复检 driver（无 Delay）
-            check = await IsWintunDriverInstalledAsync();
-            if (!check.installed)
-            {
-                Log("[TunDriverVerifyFailed] 安装后复检失败，驱动仓库中仍不存在 wintun.inf");
-                MessageBox.Show("Wintun 安装后复检失败，已阻止接管启动。", "Delta TUN 前置检查", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                return false;
-            }
-
-            Log("Wintun 安装成功，驱动复检通过");
+            Log("wintun.dll 已就绪，进入 sing-box TUN 创建阶段");
             return true;
         }
         catch (Exception ex)
@@ -426,36 +524,17 @@ public sealed class MainForm : Form
         }
     }
 
-    private async Task<(bool installed, string reason)> IsWintunDriverInstalledAsync()
-    {
-        // 严格检查 Driver Store 字段，避免 substring 误判
-        var result = await RunHiddenAsync("pnputil", "/enum-drivers");
-        if (result.ExitCode != 0)
-            return (false, "pnputil_failed");
-
-        var text = (result.StdOut + "\n" + result.StdErr)
-            .Replace("\r", "");
-
-        var blocks = text.Split(new[] { "\n\n" }, StringSplitOptions.RemoveEmptyEntries);
-        foreach (var b in blocks)
-        {
-            var hasOriginal = Regex.IsMatch(b, @"Original\s+Name\s*:\s*wintun\.inf", RegexOptions.IgnoreCase);
-            if (hasOriginal)
-                return (true, "found_wintun_inf");
-        }
-
-        return (false, "wintun_inf_not_found");
-    }
-
-    private async Task<bool> InstallWintunAsync()
+    private async Task<bool> EnsureWintunDllReadyAsync()
     {
         try
         {
-            var cacheDir = Path.Combine(GetDataDir(), "cache");
+            var appDir = GetDataDir();
+            var targetDll = Path.Combine(appDir, "wintun.dll");
+
+            var cacheDir = Path.Combine(appDir, "cache");
             Directory.CreateDirectory(cacheDir);
             var cachedZip = Path.Combine(cacheDir, "wintun-0.14.1.zip");
 
-            // 缓存命中且 hash 正确则不重复下载
             if (!File.Exists(cachedZip) || !VerifySha256(cachedZip, WintunZipSha256))
             {
                 try
@@ -477,43 +556,39 @@ public sealed class MainForm : Form
                 return false;
             }
 
-            // temp 解压安装
             var tempRoot = Path.Combine(Path.GetTempPath(), "DeltaWintun_" + DateTime.Now.ToString("yyyyMMddHHmmss"));
             Directory.CreateDirectory(tempRoot);
             ZipFile.ExtractToDirectory(cachedZip, tempRoot, true);
 
-            var inf = Directory.GetFiles(tempRoot, "wintun.inf", SearchOption.AllDirectories)
-                .FirstOrDefault(x => x.Contains("amd64", StringComparison.OrdinalIgnoreCase));
-            if (string.IsNullOrWhiteSpace(inf))
-                inf = Directory.GetFiles(tempRoot, "wintun.inf", SearchOption.AllDirectories).FirstOrDefault();
-
-            if (string.IsNullOrWhiteSpace(inf))
+            var dll = Path.Combine(tempRoot, "wintun", "bin", "amd64", "wintun.dll");
+            if (!File.Exists(dll))
             {
-                Log("[TunDriverInstallFailed] Wintun 包中未找到 wintun.inf");
+                dll = Directory.GetFiles(tempRoot, "wintun.dll", SearchOption.AllDirectories)
+                    .FirstOrDefault(x => x.Contains("amd64", StringComparison.OrdinalIgnoreCase))
+                    ?? Directory.GetFiles(tempRoot, "wintun.dll", SearchOption.AllDirectories).FirstOrDefault()
+                    ?? "";
+            }
+
+            if (string.IsNullOrWhiteSpace(dll) || !File.Exists(dll))
+            {
+                Log("[TunDllPrepareFailed] 压缩包内未找到 bin/amd64/wintun.dll");
                 try { Directory.Delete(tempRoot, true); } catch { }
                 return false;
             }
 
-            var install = await RunHiddenAsync("pnputil", $"/add-driver \"{inf}\" /install");
-            Log($"Wintun 安装返回码: {install.ExitCode}");
+            File.Copy(dll, targetDll, true);
+            Log($"wintun.dll 已写入: {targetDll}");
 
-            // 清理失败不影响安装结果
             try { Directory.Delete(tempRoot, true); } catch { }
-
-            if (install.ExitCode != 0)
-            {
-                Log("[TunDriverInstallFailed] pnputil 安装失败\n" + install.StdErr);
-                return false;
-            }
-
             return true;
         }
         catch (Exception ex)
         {
-            Log("[TunUnknownError] 安装 Wintun 异常: " + ex.Message);
+            Log("[TunDllPrepareFailed] 准备 wintun.dll 异常: " + ex.Message);
             return false;
         }
     }
+
 
     private bool VerifySha256(string path, string expectedLowerHex)
     {
@@ -920,7 +995,7 @@ public sealed class MainForm : Form
                         type = "tun",
                         tag = "tun-in",
                         interface_name = tunInterface,
-                        address = new[] { tunCidr },
+                        inet4_address = tunCidr,
                         auto_route = true,
                         strict_route = true,
                         stack = "system",
@@ -949,7 +1024,7 @@ public sealed class MainForm : Form
                 route = new
                 {
                     auto_detect_interface = true,
-                    final = "direct",
+                    final = "hy2-out",
                     rules = new object[]
                     {
                         new
