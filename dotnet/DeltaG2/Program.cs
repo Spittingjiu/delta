@@ -27,7 +27,7 @@ internal static class Program
 
 public sealed class MainForm : Form
 {
-    private const string Version = "G6.64";
+    private const string Version = "G6.65";
     private const string SingBoxVersion = "1.13.3";
     private const string UpdateManifestUrl = "https://delta.zzao.de/latest.json";
     private const string DefaultExeUrlTemplate = "https://delta.zzao.de/releases/Delta v{0}.exe";
@@ -2088,7 +2088,7 @@ public sealed class MainForm : Form
 
         var rules = new List<object>
         {
-            new { protocol = "dns", action = "route", outbound = "dns-out" },
+            new { protocol = "dns", action = "hijack-dns" },
             new { ip_version = 6, action = "reject" }
         };
 
@@ -2178,7 +2178,7 @@ public sealed class MainForm : Form
                 {
                     servers = new object[]
                     {
-                        new { type = "https", tag = "google-doh", server = "dns.google", path = "/dns-query", detour = "hy2-out" }
+                        new { type = "https", tag = "google-doh", server = "8.8.8.8", path = "/dns-query", tls = new { enabled = true, server_name = "dns.google" }, detour = "hy2-out" }
                     },
                     strategy = "ipv4_only",
                     final = "google-doh"
@@ -2197,8 +2197,7 @@ public sealed class MainForm : Form
                         up_mbps = upMbps,
                         down_mbps = downMbps
                     },
-                    new { type = "direct", tag = "direct" },
-                    new { type = "dns", tag = "dns-out" }
+                    new { type = "direct", tag = "direct" }
                 },
                 route = new
                 {
@@ -2221,7 +2220,7 @@ public sealed class MainForm : Form
                 {
                     servers = new object[]
                     {
-                        new { type = "https", tag = "google-doh", server = "dns.google", path = "/dns-query", detour = "hy2-out" }
+                        new { type = "https", tag = "google-doh", server = "8.8.8.8", path = "/dns-query", tls = new { enabled = true, server_name = "dns.google" }, detour = "hy2-out" }
                     },
                     strategy = "ipv4_only",
                     final = "google-doh"
@@ -2240,8 +2239,7 @@ public sealed class MainForm : Form
                         up_mbps = upMbps,
                         down_mbps = downMbps
                     },
-                    new { type = "direct", tag = "direct" },
-                    new { type = "dns", tag = "dns-out" }
+                    new { type = "direct", tag = "direct" }
                 },
                 route = new
                 {
@@ -2268,7 +2266,7 @@ public sealed class MainForm : Form
             throw;
         }
 
-        _routeStatus.Text = useValidationMode ? "路由：全隧道验证(final=hy2-out,dns=dns-out,IPv6=reject)" : $"路由：{rules.Count}条规则，final=direct,dns=dns-out,IPv6=reject";
+        _routeStatus.Text = useValidationMode ? "路由：全隧道验证(final=hy2-out,dns=hijack-dns,IPv6=reject)" : $"路由：{rules.Count}条规则，final=direct,dns=hijack-dns,IPv6=reject";
         var modeTxt = useValidationMode ? "Hy2(全局)" : "Direct(默认)+Hy2(命中规则)";
         Log($"已写入接管配置: {cfgPath}");
         Log($"规则(游戏路径): {string.Join(" | ", gameRulePaths)}");
