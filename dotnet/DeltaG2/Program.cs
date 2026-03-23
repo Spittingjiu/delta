@@ -27,7 +27,7 @@ internal static class Program
 
 public sealed class MainForm : Form
 {
-    private const string Version = "G6.62";
+    private const string Version = "G6.63";
     private const string SingBoxVersion = "1.13.3";
     private const string UpdateManifestUrl = "https://delta.zzao.de/latest.json";
     private const string DefaultExeUrlTemplate = "https://delta.zzao.de/releases/Delta v{0}.exe";
@@ -2077,7 +2077,6 @@ public sealed class MainForm : Form
         var obfsPassword = (_hy2ObfsPassword.Text ?? "").Trim();
         var upMbps = int.TryParse((_hy2UpMbps.Text ?? "80").Trim(), out var up) ? Math.Max(1, up) : 80;
         var downMbps = int.TryParse((_hy2DownMbps.Text ?? "200").Trim(), out var down) ? Math.Max(1, down) : 200;
-        var tunDnsHijack = BuildTunDnsHijackTarget(tunCidr);
 
         var gamePaths = ExpandExePathsFromFolders(_gameFolderPaths.Text);
         var launcherPaths = new List<string>();
@@ -2171,8 +2170,7 @@ public sealed class MainForm : Form
                         auto_route = true,
                         strict_route = TemplateTunStrictRoute(),
                         stack = "system",
-                        sniff = TemplateTunSniff(),
-                        dns_hijack = new[] { "any:53", tunDnsHijack }
+                        sniff = TemplateTunSniff()
                     },
                     new { type = "mixed", tag = "mixed-in", listen = "127.0.0.1", listen_port = 10809 }
                 },
@@ -2502,19 +2500,6 @@ public sealed class MainForm : Form
     {
         var suffix = DateTime.Now.ToString("HHmmss");
         return $"DeltaTun{suffix}";
-    }
-
-    private string BuildTunDnsHijackTarget(string tunCidr)
-    {
-        var cidr = (tunCidr ?? "").Trim();
-        var ip = cidr.Split('/')[0];
-        var seg = ip.Split('.');
-        if (seg.Length == 4)
-        {
-            seg[3] = "2";
-            return $"{seg[0]}.{seg[1]}.{seg[2]}.{seg[3]}:53";
-        }
-        return "172.153.137.2:53";
     }
 
     private string BuildTunCidr()
