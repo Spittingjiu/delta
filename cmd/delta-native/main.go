@@ -18,10 +18,16 @@ import (
 )
 
 type Node struct {
-	Key  string
-	Name string
-	Host string
+	Key  string `json:"key"`
+	Name string `json:"name"`
+	Host string `json:"host"`
 }
+
+type AppConfig struct {
+	Nodes []Node `json:"nodes"`
+}
+
+var nodes []Node
 
 type ProbeResult struct {
 	Node  Node
@@ -40,13 +46,12 @@ type State struct {
 
 const AppVersion = "G1"
 
-var nodes = []Node{
-	{Key: "jp", Name: "JP 日本", Host: "216.23.84.252"},
-	{Key: "de", Name: "DE 德国优化", Host: "178.22.26.114"},
-	{Key: "sjc", Name: "SJC 圣何塞", Host: "45.143.130.90"},
-}
 
 func main() {
+	if err := loadNodesFromConfig(); err != nil {
+		fmt.Println("load config failed:", err)
+		os.Exit(1)
+	}
 	var mw *walk.MainWindow
 	var procCB *walk.ComboBox
 	var nodeCB *walk.ComboBox
@@ -192,6 +197,32 @@ func main() {
 	appendLog("Delta 版本: " + AppVersion)
 	appendLog("Delta GUI 已启动")
 	mw.Run()
+}
+
+func configPath() string {
+	base := os.Getenv("ProgramData")
+	if base == "" {
+		base = `C:\ProgramData`
+	}
+	dir := filepath.Join(base, "Delta", "config")
+	_ = os.MkdirAll(dir, 0755)
+	return filepath.Join(dir, "settings.json")
+}
+
+func loadNodesFromConfig() error {
+	b, err := os.ReadFile(configPath())
+	if err != nil {
+		return err
+	}
+	var cfg AppConfig
+	if err := json.Unmarshal(b, &cfg); err != nil {
+		return err
+	}
+	if len(cfg.Nodes) == 0 {
+		return errors.New("no nodes in config/settings.json")
+	}
+	nodes = cfg.Nodes
+	return nil
 }
 
 func selectNode(key string) (Node, error) {

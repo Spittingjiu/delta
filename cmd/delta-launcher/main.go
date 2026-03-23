@@ -49,13 +49,12 @@ type applyReq struct {
 	Node    string `json:"node"`
 }
 
-var nodes = []Node{
-	{Key: "jp", Name: "Japan", Host: "216.23.84.252"},
-	{Key: "de", Name: "Germany Optimized", Host: "178.22.26.114"},
-	{Key: "sjc", Name: "San Jose", Host: "45.143.130.90"},
-}
 
 func main() {
+	if err := loadNodesFromConfig(); err != nil {
+		fmt.Println("load config failed:", err)
+		os.Exit(1)
+	}
 	if runtime.GOOS != "windows" {
 		fmt.Println("Delta is for Windows runtime.")
 		os.Exit(2)
@@ -192,6 +191,32 @@ func writeJSON(w http.ResponseWriter, v apiResp) {
 
 func openBrowser(url string) error {
 	return exec.Command("rundll32", "url.dll,FileProtocolHandler", url).Start()
+}
+
+func configPath() string {
+	base := os.Getenv("ProgramData")
+	if base == "" {
+		base = `C:\ProgramData`
+	}
+	dir := filepath.Join(base, "Delta", "config")
+	_ = os.MkdirAll(dir, 0755)
+	return filepath.Join(dir, "settings.json")
+}
+
+func loadNodesFromConfig() error {
+	b, err := os.ReadFile(configPath())
+	if err != nil {
+		return err
+	}
+	var cfg AppConfig
+	if err := json.Unmarshal(b, &cfg); err != nil {
+		return err
+	}
+	if len(cfg.Nodes) == 0 {
+		return errors.New("no nodes in config/settings.json")
+	}
+	nodes = cfg.Nodes
+	return nil
 }
 
 func selectNode(key string) (Node, error) {
