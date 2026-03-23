@@ -27,7 +27,7 @@ internal static class Program
 
 public sealed class MainForm : Form
 {
-    private const string Version = "G6.55";
+    private const string Version = "G6.56";
     private const string SingBoxVersion = "1.13.3";
     private const string UpdateManifestUrl = "https://delta.zzao.de/latest.json";
     private const string DefaultExeUrlTemplate = "https://delta.zzao.de/releases/Delta v{0}.exe";
@@ -2602,15 +2602,33 @@ public sealed class MainForm : Form
         };
     }
 
+
+    private bool ShouldKeepLogForActiveProcess(string source, string message)
+    {
+        if (string.IsNullOrWhiteSpace(_activeProcess)) return true;
+        var p = _activeProcess;
+        var bare = Path.GetFileNameWithoutExtension(p ?? "");
+        if (string.IsNullOrWhiteSpace(bare)) return true;
+
+        if (source.Equals("engine", StringComparison.OrdinalIgnoreCase)) return true;
+
+        var m = message ?? "";
+        var important = m.Contains("错误") || m.Contains("失败") || m.Contains("WARN", StringComparison.OrdinalIgnoreCase) || m.Contains("ERROR", StringComparison.OrdinalIgnoreCase) || m.Contains("FATAL", StringComparison.OrdinalIgnoreCase);
+        if (important) return true;
+
+        return m.Contains(bare, StringComparison.OrdinalIgnoreCase) || m.Contains(p, StringComparison.OrdinalIgnoreCase);
+    }
+
     private void LogEngine(string msg) => LogEx("INFO", "engine", msg, _recentEngineLogs);
     private void LogCore(string msg) => LogEx("INFO", "core", msg, _recentCoreLogs);
     private void LogProbe(string msg) => LogEx("INFO", "probe", msg, _recentProbeLogs);
 
     private void LogEx(string level, string source, string msg, List<LogEntry> bucket)
     {
+        if (!ShouldKeepLogForActiveProcess(source, msg)) return;
         var e = new LogEntry { Time = DateTime.Now, Level = level, Source = source, Message = msg };
         bucket.Add(e);
-        if (bucket.Count > 200) bucket.RemoveRange(0, bucket.Count - 200);
+        if (bucket.Count > 50) bucket.RemoveRange(0, bucket.Count - 50);
         Log($"[{source}] {msg}");
         if ((DateTime.Now - _lastLogViewRefreshAt).TotalMilliseconds > 350)
         {
@@ -2668,7 +2686,7 @@ public sealed class MainForm : Form
         {
             _log.AppendText(line);
 
-            const int maxChars = 120000;
+            const int maxChars = 30000;
             if (_log.TextLength > maxChars)
             {
                 _log.Text = _log.Text[^maxChars..];
