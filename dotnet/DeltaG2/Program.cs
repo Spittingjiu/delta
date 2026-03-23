@@ -27,7 +27,7 @@ internal static class Program
 
 public sealed class MainForm : Form
 {
-    private const string Version = "G6.60";
+    private const string Version = "G6.61";
     private const string SingBoxVersion = "1.13.3";
     private const string UpdateManifestUrl = "https://delta.zzao.de/latest.json";
     private const string DefaultExeUrlTemplate = "https://delta.zzao.de/releases/Delta v{0}.exe";
@@ -2077,6 +2077,7 @@ public sealed class MainForm : Form
         var obfsPassword = (_hy2ObfsPassword.Text ?? "").Trim();
         var upMbps = int.TryParse((_hy2UpMbps.Text ?? "80").Trim(), out var up) ? Math.Max(1, up) : 80;
         var downMbps = int.TryParse((_hy2DownMbps.Text ?? "200").Trim(), out var down) ? Math.Max(1, down) : 200;
+        var tunDnsHijack = BuildTunDnsHijackTarget(tunCidr);
 
         var gamePaths = ExpandExePathsFromFolders(_gameFolderPaths.Text);
         var launcherPaths = new List<string>();
@@ -2086,7 +2087,11 @@ public sealed class MainForm : Form
             gamePaths.Add(processExe);
         }
 
-        var rules = new List<object>();
+        var rules = new List<object>
+        {
+            new { protocol = "dns", action = "route", outbound = "dns-out" },
+            new { ip_version = 6, action = "reject" }
+        };
 
         var gameRulePaths = gamePaths.Where(x => x.Contains('\\') || x.Contains('/')).ToArray();
         var gamePathRegex = gameRulePaths.Select(x => "^" + Regex.Escape(x).Replace("\\\\", "[/\\\\]") + "$").ToArray();
@@ -2166,9 +2171,19 @@ public sealed class MainForm : Form
                         auto_route = true,
                         strict_route = TemplateTunStrictRoute(),
                         stack = "system",
-                        sniff = TemplateTunSniff()
+                        sniff = TemplateTunSniff(),
+                        dns_hijack = new[] { "any:53", tunDnsHijack }
                     },
                     new { type = "mixed", tag = "mixed-in", listen = "127.0.0.1", listen_port = 10809 }
+                },
+                dns = new
+                {
+                    servers = new object[]
+                    {
+                        new { tag = "google-doh", address = "https://8.8.8.8/dns-query", detour = "hy2-out" }
+                    },
+                    query_strategy = "use_ipv4",
+                    final = "google-doh"
                 },
                 outbounds = new object[]
                 {
@@ -2184,12 +2199,13 @@ public sealed class MainForm : Form
                         up_mbps = upMbps,
                         down_mbps = downMbps
                     },
-                    new { type = "direct", tag = "direct" }
+                    new { type = "direct", tag = "direct" },
+                    new { type = "dns", tag = "dns-out" }
                 },
                 route = new
                 {
                     auto_detect_interface = true,
-                    rules = useValidationMode ? Array.Empty<object>() : rules.ToArray(),
+                    rules = rules.ToArray(),
                     final = useValidationMode ? "hy2-out" : "direct"
                 }
             };
@@ -2203,6 +2219,15 @@ public sealed class MainForm : Form
                 {
                     new { type = "mixed", tag = "mixed-in", listen = "127.0.0.1", listen_port = 10809 }
                 },
+                dns = new
+                {
+                    servers = new object[]
+                    {
+                        new { tag = "google-doh", address = "https://8.8.8.8/dns-query", detour = "hy2-out" }
+                    },
+                    query_strategy = "use_ipv4",
+                    final = "google-doh"
+                },
                 outbounds = new object[]
                 {
                     new
@@ -2217,11 +2242,12 @@ public sealed class MainForm : Form
                         up_mbps = upMbps,
                         down_mbps = downMbps
                     },
-                    new { type = "direct", tag = "direct" }
+                    new { type = "direct", tag = "direct" },
+                    new { type = "dns", tag = "dns-out" }
                 },
                 route = new
                 {
-                    rules = useValidationMode ? Array.Empty<object>() : rules.ToArray(),
+                    rules = rules.ToArray(),
                     final = useValidationMode ? "hy2-out" : "direct"
                 }
             };
@@ -2244,7 +2270,7 @@ public sealed class MainForm : Form
             throw;
         }
 
-        _routeStatus.Text = useValidationMode ? "路由：全隧道验证模式(final=hy2-out)" : $"路由：{rules.Count}条规则，final=direct";
+        _routeStatus.Text = useValidationMode ? "路由：全隧道验证(final=hy2-out,dns=dns-out,IPv6=reject)" : $"路由：{rules.Count}条规则，final=direct,dns=dns-out,IPv6=reject";
         var modeTxt = useValidationMode ? "Hy2(全局)" : "Direct(默认)+Hy2(命中规则)";
         Log($"已写入接管配置: {cfgPath}");
         Log($"规则(游戏路径): {string.Join(" | ", gameRulePaths)}");
@@ -2476,6 +2502,19 @@ public sealed class MainForm : Form
     {
         var suffix = DateTime.Now.ToString("HHmmss");
         return $"DeltaTun{suffix}";
+    }
+
+    private string BuildTunDnsHijackTarget(string tunCidr)
+    {
+        var cidr = (tunCidr ?? "").Trim();
+        var ip = cidr.Split('/')[0];
+        var seg = ip.Split('.');
+        if (seg.Length == 4)
+        {
+            seg[3] = "2";
+            return $"{seg[0]}.{seg[1]}.{seg[2]}.{seg[3]}:53";
+        }
+        return "172.153.137.2:53";
     }
 
     private string BuildTunCidr()
