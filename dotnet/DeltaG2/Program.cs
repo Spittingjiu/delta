@@ -27,7 +27,7 @@ internal static class Program
 
 public sealed class MainForm : Form
 {
-    private const string Version = "G6.52";
+    private const string Version = "G6.53";
     private const string SingBoxVersion = "1.13.3";
     private const string UpdateManifestUrl = "https://delta.zzao.de/latest.json";
     private const string DefaultExeUrlTemplate = "https://delta.zzao.de/releases/Delta v{0}.exe";
@@ -118,6 +118,8 @@ public sealed class MainForm : Form
     private readonly TextBox _hy2Sni = new() { Width = 160, Text = "www.bing.com", Visible = false };
     private readonly TextBox _hy2ObfsType = new() { Width = 110, PlaceholderText = "混淆类型", Visible = false };
     private readonly TextBox _hy2ObfsPassword = new() { Width = 140, PlaceholderText = "混淆密码", Visible = false };
+    private readonly TextBox _hy2UpMbps = new() { Width = 80, Text = "80", Visible = false };
+    private readonly TextBox _hy2DownMbps = new() { Width = 80, Text = "200", Visible = false };
     private readonly TextBox _gameFolderPaths = new() { Width = 520, PlaceholderText = "已选文件夹（自动包含其中所有.exe）" };
     private readonly TextBox _gameProcessPaths = new() { Width = 360, PlaceholderText = "游戏EXE全路径，支持多个(;分隔)", Visible = false };
     private readonly TextBox _launcherProcessPaths = new() { Width = 360, PlaceholderText = "启动器EXE全路径，可选，支持多个(;)", Visible = false };
@@ -361,6 +363,8 @@ public sealed class MainForm : Form
             _hy2Sni.Visible = _advancedMode;
             _hy2ObfsType.Visible = _advancedMode;
             _hy2ObfsPassword.Visible = _advancedMode;
+            _hy2UpMbps.Visible = _advancedMode;
+            _hy2DownMbps.Visible = _advancedMode;
             chkTunMode.Visible = _advancedMode;
             chkFullTunnelValidation.Visible = _advancedMode;
         };
@@ -372,6 +376,10 @@ public sealed class MainForm : Form
         cfgPanel.Controls.Add(_hy2Sni);
         cfgPanel.Controls.Add(_hy2ObfsType);
         cfgPanel.Controls.Add(_hy2ObfsPassword);
+        cfgPanel.Controls.Add(new Label { Text = "上行Mbps", AutoSize = true, Padding = new Padding(0, 8, 0, 0), Visible = false });
+        cfgPanel.Controls.Add(_hy2UpMbps);
+        cfgPanel.Controls.Add(new Label { Text = "下行Mbps", AutoSize = true, Padding = new Padding(0, 8, 0, 0), Visible = false });
+        cfgPanel.Controls.Add(_hy2DownMbps);
         cfgPanel.Controls.Add(new Label { Text = "文件夹模式", AutoSize = true, Padding = new Padding(0, 8, 0, 0) });
         cfgPanel.Controls.Add(_gameFolderPaths);
         cfgPanel.Controls.Add(btnPickFolder);
@@ -560,6 +568,8 @@ public sealed class MainForm : Form
             _hy2Sni.Text = string.IsNullOrWhiteSpace(settings.Hy2Sni) ? "www.bing.com" : settings.Hy2Sni!;
             _hy2ObfsType.Text = settings.Hy2ObfsType ?? "";
             _hy2ObfsPassword.Text = settings.Hy2ObfsPassword ?? "";
+            _hy2UpMbps.Text = settings.Hy2UpMbps <= 0 ? "80" : settings.Hy2UpMbps.ToString();
+            _hy2DownMbps.Text = settings.Hy2DownMbps <= 0 ? "200" : settings.Hy2DownMbps.ToString();
             _gameFolderPaths.Text = settings.GameProcessPaths ?? "";
             _launcherProcessPaths.Text = settings.LauncherProcessPaths ?? "";
             _nodes.Clear();
@@ -1949,6 +1959,8 @@ public sealed class MainForm : Form
         if (string.IsNullOrWhiteSpace(sni)) sni = "www.bing.com";
         var obfsType = (_hy2ObfsType.Text ?? "").Trim();
         var obfsPassword = (_hy2ObfsPassword.Text ?? "").Trim();
+        var upMbps = int.TryParse((_hy2UpMbps.Text ?? "80").Trim(), out var up) ? Math.Max(1, up) : 80;
+        var downMbps = int.TryParse((_hy2DownMbps.Text ?? "200").Trim(), out var down) ? Math.Max(1, down) : 200;
 
         var gamePaths = ExpandExePathsFromFolders(_gameFolderPaths.Text);
         var launcherPaths = new List<string>();
@@ -2055,7 +2067,9 @@ public sealed class MainForm : Form
                         server_port = serverPort,
                         password = token,
                         tls = new { enabled = true, server_name = sni, insecure = true },
-                        obfs = string.IsNullOrWhiteSpace(obfsType) ? null : new { type = obfsType, password = obfsPassword }
+                        obfs = string.IsNullOrWhiteSpace(obfsType) ? null : new { type = obfsType, password = obfsPassword },
+                        up_mbps = upMbps,
+                        down_mbps = downMbps
                     },
                     new { type = "direct", tag = "direct" }
                 },
@@ -2086,7 +2100,9 @@ public sealed class MainForm : Form
                         server_port = serverPort,
                         password = token,
                         tls = new { enabled = true, server_name = sni, insecure = true },
-                        obfs = string.IsNullOrWhiteSpace(obfsType) ? null : new { type = obfsType, password = obfsPassword }
+                        obfs = string.IsNullOrWhiteSpace(obfsType) ? null : new { type = obfsType, password = obfsPassword },
+                        up_mbps = upMbps,
+                        down_mbps = downMbps
                     },
                     new { type = "direct", tag = "direct" }
                 },
@@ -2123,6 +2139,7 @@ public sealed class MainForm : Form
             Log($"规则(启动器路径): {string.Join(" | ", launcherRulePaths)}");
         Log($"规则(名称回退): {string.Join(",", nameFallback)} -> hy2-out");
         Log($"路由观测: MatchedProcess=未知, CurrentMode={modeTxt}, ActiveNode={_nodeCombo.Text}, Config={cfgPath}");
+        Log($"HY2参数: up_mbps={upMbps}, down_mbps={downMbps}, 拥塞=brutal");
         if (useValidationMode)
             Log("验证模式：全流量走 hy2-out（仅排障使用）");
         else
@@ -2475,6 +2492,8 @@ public sealed class MainForm : Form
                 Hy2Sni = (_hy2Sni.Text ?? "").Trim(),
                 Hy2ObfsType = (_hy2ObfsType.Text ?? "").Trim(),
                 Hy2ObfsPassword = (_hy2ObfsPassword.Text ?? "").Trim(),
+                Hy2UpMbps = int.TryParse((_hy2UpMbps.Text ?? "80").Trim(), out var upn) ? Math.Max(1, upn) : 80,
+                Hy2DownMbps = int.TryParse((_hy2DownMbps.Text ?? "200").Trim(), out var dnn) ? Math.Max(1, dnn) : 200,
                 Nodes = _nodes
             };
             File.WriteAllText(p, JsonSerializer.Serialize(s));
@@ -2598,6 +2617,8 @@ public sealed class DeltaSettings
     public string? Hy2Sni { get; set; }
     public string? Hy2ObfsType { get; set; }
     public string? Hy2ObfsPassword { get; set; }
+    public int Hy2UpMbps { get; set; } = 80;
+    public int Hy2DownMbps { get; set; } = 200;
     public List<Hy2NodeProfile>? Nodes { get; set; }
 }
 
