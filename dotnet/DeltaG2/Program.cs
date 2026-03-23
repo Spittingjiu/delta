@@ -27,7 +27,7 @@ internal static class Program
 
 public sealed class MainForm : Form
 {
-    private const string Version = "G6.57";
+    private const string Version = "G6.58";
     private const string SingBoxVersion = "1.13.3";
     private const string UpdateManifestUrl = "https://delta.zzao.de/latest.json";
     private const string DefaultExeUrlTemplate = "https://delta.zzao.de/releases/Delta v{0}.exe";
@@ -336,7 +336,7 @@ public sealed class MainForm : Form
         var cfgPanel = new FlowLayoutPanel
         {
             Dock = DockStyle.Top,
-            Height = 122,
+            Height = 146,
             AutoSize = false,
             WrapContents = true,
             Padding = new Padding(8, 4, 8, 4)
@@ -370,6 +370,8 @@ public sealed class MainForm : Form
         };
 
         cfgPanel.Controls.Add(new Label { Text = "节点参数来源：当前节点（IP/端口/令牌）", AutoSize = true, Padding = new Padding(0, 8, 0, 0) });
+        cfgPanel.Controls.Add(_nodeHealthStatus);
+        cfgPanel.Controls.Add(_diagStatus);
         cfgPanel.Controls.Add(_hy2Ip);
         cfgPanel.Controls.Add(_hy2Port);
         cfgPanel.Controls.Add(_hy2Token);
@@ -419,10 +421,6 @@ public sealed class MainForm : Form
         verifyPanel.Controls.Add(_coreVersionsStatus);
         verifyPanel.Controls.Add(new Label { Text = "   " });
         verifyPanel.Controls.Add(_routeStatus);
-        verifyPanel.Controls.Add(new Label { Text = "   " });
-        verifyPanel.Controls.Add(_nodeHealthStatus);
-        verifyPanel.Controls.Add(new Label { Text = "   " });
-        verifyPanel.Controls.Add(_diagStatus);
         verifyPanel.Controls.Add(new Label { Text = "   " });
         verifyPanel.Controls.Add(_ipDirect);
         verifyPanel.Controls.Add(new Label { Text = "   " });
