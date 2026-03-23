@@ -27,7 +27,7 @@ internal static class Program
 
 public sealed class MainForm : Form
 {
-    private const string Version = "G6.61";
+    private const string Version = "G6.62";
     private const string SingBoxVersion = "1.13.3";
     private const string UpdateManifestUrl = "https://delta.zzao.de/latest.json";
     private const string DefaultExeUrlTemplate = "https://delta.zzao.de/releases/Delta v{0}.exe";
@@ -2180,7 +2180,7 @@ public sealed class MainForm : Form
                 {
                     servers = new object[]
                     {
-                        new { tag = "google-doh", address = "https://8.8.8.8/dns-query", detour = "hy2-out" }
+                        new { type = "https", tag = "google-doh", server = "dns.google", path = "/dns-query", detour = "hy2-out" }
                     },
                     query_strategy = "use_ipv4",
                     final = "google-doh"
@@ -2223,7 +2223,7 @@ public sealed class MainForm : Form
                 {
                     servers = new object[]
                     {
-                        new { tag = "google-doh", address = "https://8.8.8.8/dns-query", detour = "hy2-out" }
+                        new { type = "https", tag = "google-doh", server = "dns.google", path = "/dns-query", detour = "hy2-out" }
                     },
                     query_strategy = "use_ipv4",
                     final = "google-doh"
