@@ -49,7 +49,6 @@ type applyReq struct {
 	Node    string `json:"node"`
 }
 
-
 func main() {
 	if err := loadNodesFromConfig(); err != nil {
 		fmt.Println("load config failed:", err)

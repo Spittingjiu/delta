@@ -46,7 +46,6 @@ type State struct {
 
 const AppVersion = "G1"
 
-
 func main() {
 	if err := loadNodesFromConfig(); err != nil {
 		fmt.Println("load config failed:", err)

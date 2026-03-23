@@ -43,7 +43,6 @@ type State struct {
 	StartedAt   time.Time `json:"startedAt"`
 }
 
-
 func main() {
 	if err := loadNodesFromConfig(); err != nil {
 		fmt.Println("load config failed:", err)

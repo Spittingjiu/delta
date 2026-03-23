@@ -111,7 +111,6 @@ public sealed class MainForm : Form
     private readonly ComboBox _logLevelFilter = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 120 };
     private readonly Button _btnCopyLog = new() { Text = "复制日志", AutoSize = true };
 
-
     private readonly TextBox _hy2Ip = new() { Width = 170, Text = "178.22.26.114", Visible = false };
     private readonly TextBox _hy2Port = new() { Width = 70, Text = "8443", Visible = false };
     private readonly TextBox _hy2Token = new() { Width = 220, Visible = false };
@@ -616,7 +615,6 @@ public sealed class MainForm : Form
                 .OrderBy(x => x, StringComparer.OrdinalIgnoreCase)
                 .ToList();
 
-            // 顶部已移除游戏进程下拉，这里仅保留扫描日志
             Log($"系统进程数量: {list.Count}");
         }
         catch (Exception ex)
@@ -965,8 +963,6 @@ public sealed class MainForm : Form
             var hs = await WaitForHy2HandshakeAsync(ip, port, TemplateHandshakeTimeoutMs());
             if (!hs)
             {
-                // sing-box/hysteria2 在部分环境下不会立刻出现可见的 TCP ESTABLISHED，
-                // 这里不再硬阻断启动，改为告警并进入运行态，由后续验证面板给出最终判定。
                 _lastEngineError = EngineError.HysteriaHandshakeFailed;
                 _verifyStatus.Text = "验证：握手探测未命中（继续运行）";
                 Log("握手探测未命中：未检测到到 " + ip + ":" + port + " 的连接，已转为非阻断告警");
@@ -987,14 +983,12 @@ public sealed class MainForm : Form
         }
     }
 
-
     private sealed class CmdResult
     {
         public int ExitCode { get; set; }
         public string StdOut { get; set; } = "";
         public string StdErr { get; set; } = "";
     }
-
 
     private async Task<bool> WaitForTunReadyAsync(Process process, TimeSpan timeout)
     {
@@ -1071,7 +1065,6 @@ public sealed class MainForm : Form
         FailEngine(EngineError.TunCreateTimeout, "等待 TUN 就绪超时", GetRecentCoreLogsText(40));
         return false;
     }
-
 
     private async Task<bool> EnsureTunReadyAsync()
     {
@@ -1178,7 +1171,6 @@ public sealed class MainForm : Form
         }
     }
 
-
     private bool VerifySha256(string path, string expectedLowerHex)
     {
         try
@@ -1252,20 +1244,16 @@ public sealed class MainForm : Form
             _ = await RunHiddenAsync("cmd.exe", "/c taskkill /F /IM sing-box.exe >nul 2>nul");
             _ = await RunHiddenAsync("cmd.exe", "/c taskkill /F /IM hysteria.exe >nul 2>nul");
 
-            // 清理 WinINET 代理
             _ = await RunHiddenAsync("cmd.exe", "/c reg add \"HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings\" /v ProxyEnable /t REG_DWORD /d 0 /f");
             _ = await RunHiddenAsync("cmd.exe", "/c reg delete \"HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings\" /v ProxyServer /f");
             _ = await RunHiddenAsync("cmd.exe", "/c reg delete \"HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings\" /v AutoConfigURL /f");
 
-            // 清理 WinHTTP 代理
             _ = await RunHiddenAsync("netsh", "winhttp reset proxy");
 
-            // 清理可能残留的 TUN 网卡 IP
             var ps = "Get-NetAdapter -Name 'DeltaTun*' -ErrorAction SilentlyContinue | ForEach-Object { " +
                      "try { Get-NetIPAddress -InterfaceIndex $_.ifIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue | Remove-NetIPAddress -Confirm:$false -ErrorAction SilentlyContinue } catch {} }";
             _ = await RunHiddenAsync("powershell.exe", $"-NoProfile -ExecutionPolicy Bypass -Command \"{ps}\"");
 
-            // 重置网络栈
             _ = await RunHiddenAsync("netsh", "winsock reset");
             _ = await RunHiddenAsync("netsh", "int ip reset");
             _ = await RunHiddenAsync("ipconfig", "/flushdns");
@@ -1817,7 +1805,7 @@ public sealed class MainForm : Form
             using var ssl = new SslStream(tcp.GetStream(), false, (_, _, _, errors) =>
             {
                 tlsErrors = errors;
-                return true; // 这里只做诊断，不在测试阶段拦截
+                return true;
             });
 
             await ssl.AuthenticateAsClientAsync(new SslClientAuthenticationOptions
@@ -1905,7 +1893,6 @@ public sealed class MainForm : Form
         return string.Join("\n", arr.Skip(arr.Length - lines));
     }
 
-
     private void CleanupStaleTemp()
     {
         try
@@ -1979,7 +1966,6 @@ public sealed class MainForm : Form
             }
             else
             {
-                // UDP: netstat 输出通常为 UDP local remote pid
                 state = "";
                 if (!int.TryParse(parts[3], out pid)) continue;
             }
@@ -2077,7 +2063,6 @@ public sealed class MainForm : Form
 
         var rules = new List<object>();
 
-        // 优先 process_path（游戏）
         var gameRulePaths = gamePaths.Where(x => x.Contains('\\') || x.Contains('/')).ToArray();
         var gamePathRegex = gameRulePaths.Select(x => "^" + Regex.Escape(x).Replace("\\\\", "[/\\\\]") + "$").ToArray();
         if (gameRulePaths.Length > 0)
@@ -2096,7 +2081,6 @@ public sealed class MainForm : Form
             });
         }
 
-        // 启动器路径
         var launcherRulePaths = launcherPaths.Where(x => x.Contains('\\') || x.Contains('/')).ToArray();
         var launcherPathRegex = launcherRulePaths.Select(x => "^" + Regex.Escape(x).Replace("\\\\", "[/\\\\]") + "$").ToArray();
         if (launcherRulePaths.Length > 0)
@@ -2115,7 +2099,6 @@ public sealed class MainForm : Form
             });
         }
 
-        // fallback process_name
         var nameFallback = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { processExe, processBare };
         foreach (var gp in gamePaths)
         {
@@ -2263,7 +2246,6 @@ public sealed class MainForm : Form
         return cfgPath;
     }
 
-
     private async Task CheckUpdateAsync(bool manual)
     {
         try
@@ -2337,7 +2319,6 @@ public sealed class MainForm : Form
             _btnCheckUpdate.Enabled = true;
         }
     }
-
 
     private async Task UpdateToLatestAsync()
     {
@@ -2468,24 +2449,20 @@ public sealed class MainForm : Form
 
     private string BuildTunInterfaceName()
     {
-        // Windows 上若残留同名 TUN 设备，sing-box 可能报：Cannot create a file when that file already exists
-        // 每次启动用新接口名，避免被残留网卡占用。
         var suffix = DateTime.Now.ToString("HHmmss");
         return $"DeltaTun{suffix}";
     }
 
     private string BuildTunCidr()
     {
-        // 避免 "set ipv4 address: The object already exists"：每次启动切换一个 /30 网段
         var seed = DateTime.UtcNow.Ticks;
-        var b = (int)(seed % 200) + 20;  // 20..219
+        var b = (int)(seed % 200) + 20;
         var c = (int)((seed / 13) % 200) + 20;
         return $"172.{b}.{c}.1/30";
     }
 
     private string GetDataDir()
     {
-        // 老板要求：配置与运行文件写在当前目录，不写 AppData
         var dir = Path.GetDirectoryName(Application.ExecutablePath) ?? AppContext.BaseDirectory;
         Directory.CreateDirectory(dir);
         EnsureRuntimeLayout(dir);
@@ -2768,8 +2745,8 @@ public sealed class NetRow
 public sealed class UpdateManifest
 {
     public string? version { get; set; }
-    public string? url { get; set; }              // 兼容旧字段（zip）
-    public string? fileName { get; set; }         // 兼容旧字段（zip）
+    public string? url { get; set; }
+    public string? fileName { get; set; }
     public string? exeUrl { get; set; }
     public string? exeFileName { get; set; }
     public string? singBoxUrl { get; set; }
