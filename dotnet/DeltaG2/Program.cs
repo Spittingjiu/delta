@@ -27,7 +27,7 @@ internal static class Program
 
 public sealed class MainForm : Form
 {
-    private const string Version = "G6.58";
+    private const string Version = "G6.59";
     private const string SingBoxVersion = "1.13.3";
     private const string UpdateManifestUrl = "https://delta.zzao.de/latest.json";
     private const string DefaultExeUrlTemplate = "https://delta.zzao.de/releases/Delta v{0}.exe";
@@ -631,19 +631,6 @@ public sealed class MainForm : Form
 
         ApplySelectedNodeToInputs();
 
-        var exes = ExpandExePathsFromFolders(_gameFolderPaths.Text);
-        if (exes.Count == 0)
-        {
-            MessageBox.Show("请先新增一个包含 .exe 的文件夹。", "开始接管", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-            return;
-        }
-
-        var procPath = exes[0];
-        var proc = Path.GetFileName(procPath);
-        _activeProcess = proc;
-        Log($"目标进程: {_activeProcess}");
-        Log($"当前节点: {_nodeCombo.Text}");
-
         if (!_useTunMode)
         {
             _status.Text = "状态：未接管（请开启 TUN 模式）";
@@ -652,24 +639,50 @@ public sealed class MainForm : Form
             return;
         }
 
-        var accelOk = await ApplyProcessAccelerationAsync(_activeProcess!, procPath);
-        if (!accelOk)
+        string startProcess;
+        if (_fullTunnelValidationMode)
         {
-            _status.Text = "状态：接管失败";
-            return;
+            _activeProcess = "FULL-TUNNEL";
+            startProcess = "full-tunnel.exe";
+            Log("全隧道验证模式已启用：无需添加EXE，全部流量走 hy2-out");
+            Log($"当前节点: {_nodeCombo.Text}");
+        }
+        else
+        {
+            var exes = ExpandExePathsFromFolders(_gameFolderPaths.Text);
+            if (exes.Count == 0)
+            {
+                MessageBox.Show("请先新增一个包含 .exe 的文件夹。", "开始接管", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            var procPath = exes[0];
+            var proc = Path.GetFileName(procPath);
+            _activeProcess = proc;
+            startProcess = _activeProcess;
+            Log($"目标进程: {_activeProcess}");
+            Log($"当前节点: {_nodeCombo.Text}");
+
+            var accelOk = await ApplyProcessAccelerationAsync(_activeProcess!, procPath);
+            if (!accelOk)
+            {
+                _status.Text = "状态：接管失败";
+                return;
+            }
         }
 
-        var ok = await StartEngineAsync(_activeProcess);
+        var ok = await StartEngineAsync(startProcess);
         if (!ok)
         {
             _status.Text = "状态：接管失败";
             return;
         }
 
-        _status.Text = $"状态：接管策略已启用（{_activeProcess}）";
+        _status.Text = _fullTunnelValidationMode ? "状态：全隧道验证已启用" : $"状态：接管策略已启用（{_activeProcess}）";
         await VerifyTakeoverAsync();
         await RefreshIpProbeAsync();
     }
+
 
     private async Task RestartEngineAsync()
     {
@@ -2603,6 +2616,7 @@ public sealed class MainForm : Form
 
     private bool ShouldKeepLogForActiveProcess(string source, string message)
     {
+        if (_fullTunnelValidationMode) return true;
         if (string.IsNullOrWhiteSpace(_activeProcess)) return true;
         var p = _activeProcess;
         var bare = Path.GetFileNameWithoutExtension(p ?? "");
