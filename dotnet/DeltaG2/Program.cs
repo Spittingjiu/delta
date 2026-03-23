@@ -27,7 +27,7 @@ internal static class Program
 
 public sealed class MainForm : Form
 {
-    private const string Version = "G6.56";
+    private const string Version = "G6.57";
     private const string SingBoxVersion = "1.13.3";
     private const string UpdateManifestUrl = "https://delta.zzao.de/latest.json";
     private const string DefaultExeUrlTemplate = "https://delta.zzao.de/releases/Delta v{0}.exe";
@@ -87,23 +87,23 @@ public sealed class MainForm : Form
     private readonly ComboBox _profileCombo = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 140 };
     private readonly Label _status = new() { AutoSize = true, Text = "状态：未接管" };
     private readonly Label _engineStatus = new() { AutoSize = true, Text = "引擎：未连接" };
-    private readonly Label _verifyStatus = new() { AutoSize = true, Text = "验证：未执行" };
-    private readonly Label _updateStatus = new() { AutoSize = true, Text = "更新：检查中" };
-    private readonly Label _routeStatus = new() { AutoSize = true, Text = "路由：-" };
-    private readonly Label _diagStatus = new() { AutoSize = true, Text = "诊断：-" };
+    private readonly Label _verifyStatus = new() { AutoSize = true, MaximumSize = new Size(560, 0), Text = "验证：未执行" };
+    private readonly Label _updateStatus = new() { AutoSize = true, MaximumSize = new Size(560, 0), Text = "更新：检查中" };
+    private readonly Label _routeStatus = new() { AutoSize = true, MaximumSize = new Size(560, 0), Text = "路由：-" };
+    private readonly Label _diagStatus = new() { AutoSize = true, MaximumSize = new Size(560, 0), Text = "诊断：-" };
     private readonly Label _nodeHealthStatus = new() { AutoSize = true, Text = "节点健康：未测试" };
-    private readonly Label _coreVersionsStatus = new() { AutoSize = true, Text = "核心：sing-box v1.13.3 | hy2 20250307" };
+    private readonly Label _coreVersionsStatus = new() { AutoSize = true, MaximumSize = new Size(560, 0), Text = "核心：sing-box v1.13.3 | hy2 20250307" };
     private readonly Label _ipDirect = new() { AutoSize = true, Text = "直连IP：-" };
     private readonly Label _ipProxy = new() { AutoSize = true, Text = "代理IP：-" };
-    private readonly Label _quickSummary = new() { AutoSize = true, Text = "[未运行] | 节点:- | 模式:稳定 | 游戏:- | 路由:直连" };
+    private readonly Label _quickSummary = new() { AutoSize = true, Text = "状态:未运行 | 节点:- | 模式:稳定 | 路由:直连" };
     private readonly ListBox _nodeList = new() { Dock = DockStyle.Fill };
     private readonly ListBox _gameList = new() { Dock = DockStyle.Fill };
-    private readonly Label _cardEngine = new() { AutoSize = true, Text = "引擎状态：-" };
-    private readonly Label _cardNode = new() { AutoSize = true, Text = "当前节点：-" };
-    private readonly Label _cardMode = new() { AutoSize = true, Text = "当前模式：-" };
-    private readonly Label _cardTun = new() { AutoSize = true, Text = "TUN状态：-" };
-    private readonly Label _cardMatched = new() { AutoSize = true, Text = "命中进程：-" };
-    private readonly Label _cardRoute = new() { AutoSize = true, Text = "当前路由：-" };
+    private readonly Label _cardEngine = new() { AutoSize = true, MaximumSize = new Size(560, 0), Text = "引擎状态：-" };
+    private readonly Label _cardNode = new() { AutoSize = true, MaximumSize = new Size(560, 0), Text = "当前节点：-" };
+    private readonly Label _cardMode = new() { AutoSize = true, MaximumSize = new Size(560, 0), Text = "当前模式：-" };
+    private readonly Label _cardTun = new() { AutoSize = true, MaximumSize = new Size(560, 0), Text = "TUN状态：-" };
+    private readonly Label _cardMatched = new() { AutoSize = true, MaximumSize = new Size(560, 0), Text = "命中进程：-" };
+    private readonly Label _cardRoute = new() { AutoSize = true, MaximumSize = new Size(560, 0), Text = "当前路由：-" };
     private readonly TabControl _logsTabs = new() { Dock = DockStyle.Fill };
     private readonly TextBox _logEngineView = new() { Multiline = true, ReadOnly = true, Dock = DockStyle.Fill, ScrollBars = ScrollBars.Vertical, Font = new Font("Consolas", 10f) };
     private readonly TextBox _logCoreView = new() { Multiline = true, ReadOnly = true, Dock = DockStyle.Fill, ScrollBars = ScrollBars.Vertical, Font = new Font("Consolas", 10f) };
@@ -336,7 +336,7 @@ public sealed class MainForm : Form
         var cfgPanel = new FlowLayoutPanel
         {
             Dock = DockStyle.Top,
-            Height = 156,
+            Height = 122,
             AutoSize = false,
             WrapContents = true,
             Padding = new Padding(8, 4, 8, 4)
@@ -487,7 +487,7 @@ public sealed class MainForm : Form
         leftPanel.Controls.Add(gamePanel, 0, 1);
 
         var rightPanel = new GroupBox { Text = "状态面板", Dock = DockStyle.Fill, Padding = new Padding(8) };
-        var rightFlow = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoScroll = true };
+        var rightFlow = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoScroll = true, Padding = new Padding(4) };
         rightFlow.Controls.Add(_cardEngine);
         rightFlow.Controls.Add(_cardNode);
         rightFlow.Controls.Add(_cardMode);
@@ -1874,13 +1874,13 @@ public sealed class MainForm : Form
         _diagStatus.Text = $"诊断: 状态={EngineStateZh(_engineState)}/{EngineErrorZh(_lastEngineError)}, Wintun={wintunState}, SB={SingBoxVersion}, 节点={nodeName}, 模式={_accelerationMode}";
         var route = _fullTunnelValidationMode ? "Hy2" : "直连/命中走Hy2";
         var matched = _lastEngineError == EngineError.RouteRuleNotMatched ? "否" : "是/待验证";
-        _quickSummary.Text = $"[{EngineStateZh(_engineState)}] | 节点:{nodeName} | 模式:{AccelerationModeZh(_accelerationMode)} | 游戏:{_activeProcess ?? "-"} | 路由:{route}";
-        _cardEngine.Text = $"引擎状态：{EngineStateZh(_engineState)}";
-        _cardNode.Text = $"当前节点：{nodeName}";
-        _cardMode.Text = $"当前模式：{AccelerationModeZh(_accelerationMode)}";
-        _cardTun.Text = $"TUN状态：{wintunState}";
-        _cardMatched.Text = $"命中进程：{matched}";
-        _cardRoute.Text = $"当前路由：{route}";
+        _quickSummary.Text = $"状态:{EngineStateZh(_engineState)} | 节点:{nodeName} | 模式:{AccelerationModeZh(_accelerationMode)} | 路由:{route}";
+        _cardEngine.Text = $"引擎：{EngineStateZh(_engineState)}";
+        _cardNode.Text = $"节点：{nodeName}";
+        _cardMode.Text = $"模式：{AccelerationModeZh(_accelerationMode)}";
+        _cardTun.Text = $"TUN：{wintunState}";
+        _cardMatched.Text = $"命中：{matched}";
+        _cardRoute.Text = $"路由：{route}";
 
         Log($"[DIAG] Engine={_engineState}, Error={_lastEngineError}, Wintun={wintunState}, SB={SingBoxVersion}, Node={nodeName}, Games={games}, Cfg={_lastConfigPath ?? "-"}");
         Log($"[DIAG] LastLogs={tail}");
