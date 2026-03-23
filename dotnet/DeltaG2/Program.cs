@@ -27,7 +27,7 @@ internal static class Program
 
 public sealed class MainForm : Form
 {
-    private const string Version = "G6.59";
+    private const string Version = "G6.60";
     private const string SingBoxVersion = "1.13.3";
     private const string UpdateManifestUrl = "https://delta.zzao.de/latest.json";
     private const string DefaultExeUrlTemplate = "https://delta.zzao.de/releases/Delta v{0}.exe";
@@ -119,7 +119,7 @@ public sealed class MainForm : Form
     private readonly TextBox _hy2ObfsPassword = new() { Width = 140, PlaceholderText = "混淆密码", Visible = false };
     private readonly TextBox _hy2UpMbps = new() { Width = 80, Text = "80", Visible = false };
     private readonly TextBox _hy2DownMbps = new() { Width = 80, Text = "200", Visible = false };
-    private readonly TextBox _gameFolderPaths = new() { Width = 520, PlaceholderText = "已选文件夹（自动包含其中所有.exe）" };
+    private readonly TextBox _gameFolderPaths = new() { Width = 520, PlaceholderText = "已选目标（可单独.exe；也可文件夹递归）" };
     private readonly TextBox _gameProcessPaths = new() { Width = 360, PlaceholderText = "游戏EXE全路径，支持多个(;分隔)", Visible = false };
     private readonly TextBox _launcherProcessPaths = new() { Width = 360, PlaceholderText = "启动器EXE全路径，可选，支持多个(;)", Visible = false };
 
@@ -470,12 +470,15 @@ public sealed class MainForm : Form
         var gameBtnBar = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true };
         var btnGameAdd2 = new Button { Text = "新增游戏", AutoSize = true };
         var btnGameEdit2 = new Button { Text = "编辑游戏", AutoSize = true };
+        var btnGameAddFolder2 = new Button { Text = "新增文件夹", AutoSize = true };
         var btnGameDel2 = new Button { Text = "删除游戏", AutoSize = true };
-        btnGameAdd2.Click += (_, _) => PickFolderInto(_gameFolderPaths);
-        btnGameEdit2.Click += (_, _) => PickFolderInto(_gameFolderPaths);
+        btnGameAdd2.Click += (_, _) => PickExeInto(_gameFolderPaths);
+        btnGameEdit2.Click += (_, _) => PickExeInto(_gameFolderPaths);
+        btnGameAddFolder2.Click += (_, _) => PickFolderInto(_gameFolderPaths);
         btnGameDel2.Click += (_, _) => { _gameFolderPaths.Text = ""; RefreshGameUi(); SaveSettings(); };
         gameBtnBar.Controls.Add(btnGameAdd2);
         gameBtnBar.Controls.Add(btnGameEdit2);
+        gameBtnBar.Controls.Add(btnGameAddFolder2);
         gameBtnBar.Controls.Add(btnGameDel2);
         gameLayout.Controls.Add(_gameList, 0, 0);
         gameLayout.Controls.Add(gameBtnBar, 0, 1);
@@ -723,11 +726,16 @@ public sealed class MainForm : Form
     private List<string> ExpandExePathsFromFolders(string foldersText)
     {
         var result = new List<string>();
-        var folders = (foldersText ?? "").Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        foreach (var f in folders)
+        var items = (foldersText ?? "").Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        foreach (var f in items)
         {
             try
             {
+                if (File.Exists(f) && string.Equals(Path.GetExtension(f), ".exe", StringComparison.OrdinalIgnoreCase))
+                {
+                    result.Add(f);
+                    continue;
+                }
                 if (!Directory.Exists(f)) continue;
                 var exes = Directory.GetFiles(f, "*.exe", SearchOption.AllDirectories);
                 result.AddRange(exes);
@@ -1512,9 +1520,15 @@ public sealed class MainForm : Form
     private void RefreshGameUi()
     {
         _gameList.Items.Clear();
-        var folders = (_gameFolderPaths.Text ?? "").Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        foreach (var f in folders)
+        var items = (_gameFolderPaths.Text ?? "").Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        foreach (var f in items)
         {
+            if (File.Exists(f) && string.Equals(Path.GetExtension(f), ".exe", StringComparison.OrdinalIgnoreCase))
+            {
+                _gameList.Items.Add($"{Path.GetFileName(f)}  (.exe)");
+                continue;
+            }
+
             var count = 0;
             try { if (Directory.Exists(f)) count = Directory.GetFiles(f, "*.exe", SearchOption.AllDirectories).Length; } catch { }
             _gameList.Items.Add($"{Path.GetFileName(f)}  ({count} 个EXE)");
