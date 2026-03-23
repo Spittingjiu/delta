@@ -27,7 +27,7 @@ internal static class Program
 
 public sealed class MainForm : Form
 {
-    private const string Version = "G6.54";
+    private const string Version = "G6.55";
     private const string SingBoxVersion = "1.13.3";
     private const string UpdateManifestUrl = "https://delta.zzao.de/latest.json";
     private const string DefaultExeUrlTemplate = "https://delta.zzao.de/releases/Delta v{0}.exe";
@@ -1000,47 +1000,75 @@ public sealed class MainForm : Form
     {
         if (!_useTunMode) return true;
 
-        var startAt = DateTime.UtcNow;
-        while (DateTime.UtcNow - startAt < timeout)
+        var deadline = DateTime.UtcNow + timeout;
+        var passCount = 0;
+        var failCount = 0;
+        var backoff = 180;
+
+        while (DateTime.UtcNow < deadline)
         {
             if (process == null || process.HasExited)
             {
-                FailEngine(EngineError.CoreStartFailed, "sing-box 在 TUN 就绪前退出", GetRecentCoreLogsText(30));
-                return false;
+                failCount++;
+                if (failCount >= 2)
+                {
+                    FailEngine(EngineError.CoreStartFailed, "sing-box 在 TUN 就绪前退出", GetRecentCoreLogsText(40));
+                    return false;
+                }
+                await Task.Delay(220);
+                continue;
             }
 
-            var recent = GetRecentCoreLogs(60);
-            var tunOkLog = recent.Any(x => x.Contains("tun", StringComparison.OrdinalIgnoreCase) &&
-                                           (x.Contains("created", StringComparison.OrdinalIgnoreCase) ||
-                                            x.Contains("started", StringComparison.OrdinalIgnoreCase) ||
-                                            x.Contains("inbound", StringComparison.OrdinalIgnoreCase) ||
-                                            x.Contains("interface", StringComparison.OrdinalIgnoreCase)));
-
-            if (tunOkLog)
+            var recent = GetRecentCoreLogs(100);
+            var hasFatalTunErr = recent.Any(x => x.Contains("tun", StringComparison.OrdinalIgnoreCase) &&
+                                                 (x.Contains("fatal", StringComparison.OrdinalIgnoreCase) ||
+                                                  x.Contains("failed", StringComparison.OrdinalIgnoreCase) ||
+                                                  x.Contains("error", StringComparison.OrdinalIgnoreCase) ||
+                                                  x.Contains("cannot", StringComparison.OrdinalIgnoreCase)));
+            if (hasFatalTunErr)
             {
-                var up = NetworkInterface.GetAllNetworkInterfaces().Any(n =>
+                failCount++;
+                if (failCount >= 3)
+                {
+                    var tunErr = recent.Where(x => x.Contains("tun", StringComparison.OrdinalIgnoreCase))
+                                       .TakeLast(30)
+                                       .ToArray();
+                    FailEngine(EngineError.TunCreateFailed, "TUN 创建失败", string.Join("\n", tunErr));
+                    return false;
+                }
+            }
+
+            var logPositive = recent.Any(x => x.Contains("tun", StringComparison.OrdinalIgnoreCase) &&
+                                              (x.Contains("created", StringComparison.OrdinalIgnoreCase) ||
+                                               x.Contains("started", StringComparison.OrdinalIgnoreCase) ||
+                                               x.Contains("inbound", StringComparison.OrdinalIgnoreCase) ||
+                                               x.Contains(_currentTunInterface, StringComparison.OrdinalIgnoreCase)));
+
+            var nicUp = false;
+            try
+            {
+                nicUp = NetworkInterface.GetAllNetworkInterfaces().Any(n =>
                     n.Name.Equals(_currentTunInterface, StringComparison.OrdinalIgnoreCase) &&
                     n.OperationalStatus == OperationalStatus.Up);
-                if (up || recent.Any(x => x.Contains(_currentTunInterface, StringComparison.OrdinalIgnoreCase)))
+            }
+            catch { }
+
+            if (logPositive || nicUp)
+            {
+                passCount++;
+                if (passCount >= 2)
                     return true;
             }
-
-            var tunErr = recent.Where(x => x.Contains("tun", StringComparison.OrdinalIgnoreCase) &&
-                                           (x.Contains("error", StringComparison.OrdinalIgnoreCase) ||
-                                            x.Contains("failed", StringComparison.OrdinalIgnoreCase) ||
-                                            x.Contains("cannot", StringComparison.OrdinalIgnoreCase)))
-                               .TakeLast(20)
-                               .ToArray();
-            if (tunErr.Length > 0)
+            else
             {
-                FailEngine(EngineError.TunCreateFailed, "TUN 创建失败", string.Join("\\n", tunErr));
-                return false;
+                passCount = 0;
             }
 
-            await Task.Delay(200);
+            await Task.Delay(backoff);
+            backoff = Math.Min(backoff + 120, 1200);
         }
 
-        FailEngine(EngineError.TunCreateTimeout, "等待 TUN 就绪超时", GetRecentCoreLogsText(30));
+        FailEngine(EngineError.TunCreateTimeout, "等待 TUN 就绪超时", GetRecentCoreLogsText(40));
         return false;
     }
 
