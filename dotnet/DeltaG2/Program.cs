@@ -27,7 +27,7 @@ internal static class Program
 
 public sealed class MainForm : Form
 {
-    private const string Version = "G6.53";
+    private const string Version = "G6.54";
     private const string SingBoxVersion = "1.13.3";
     private const string UpdateManifestUrl = "https://delta.zzao.de/latest.json";
     private const string DefaultExeUrlTemplate = "https://delta.zzao.de/releases/Delta v{0}.exe";
@@ -160,6 +160,7 @@ public sealed class MainForm : Form
     private string? _lastConfigBackupPath;
     private bool _manualStopping = false;
     private int _autoRestartCount = 0;
+    private string? _qosPolicyName;
     private AccelerationMode _accelerationMode = AccelerationMode.Stable;
     private readonly List<LogEntry> _recentEngineLogs = new();
     private readonly List<LogEntry> _recentCoreLogs = new();
@@ -250,7 +251,7 @@ public sealed class MainForm : Form
         var miStop = new ToolStripMenuItem("停止");
         var miRestart = new ToolStripMenuItem("重启核心");
         miStart.Click += async (_, _) => await ApplyTakeoverAsync();
-        miStop.Click += (_, _) => StopEngine();
+        miStop.Click += async (_, _) => await RollbackAsync();
         miRestart.Click += async (_, _) => await RestartEngineAsync();
         engineMenu.DropDownItems.AddRange(new ToolStripItem[] { miStart, miStop, miRestart });
 
@@ -307,7 +308,7 @@ public sealed class MainForm : Form
         btnRefresh.Click += (_, _) => RefreshProcesses();
         btnApply.Click += async (_, _) => await ApplyTakeoverAsync();
         btnVerify.Click += async (_, _) => await VerifyTakeoverAsync();
-        btnRollback.Click += (_, _) => Rollback();
+        btnRollback.Click += async (_, _) => await RollbackAsync();
         btnNodeUpsert.Click += (_, _) => UpsertCurrentNode();
         btnNodeRemove.Click += (_, _) => RemoveCurrentNode();
         btnNodeTest.Click += async (_, _) => await TestCurrentNodeAsync();
@@ -641,7 +642,8 @@ public sealed class MainForm : Form
             return;
         }
 
-        var proc = Path.GetFileName(exes[0]);
+        var procPath = exes[0];
+        var proc = Path.GetFileName(procPath);
         _activeProcess = proc;
         Log($"目标进程: {_activeProcess}");
         Log($"当前节点: {_nodeCombo.Text}");
@@ -651,6 +653,13 @@ public sealed class MainForm : Form
             _status.Text = "状态：未接管（请开启 TUN 模式）";
             Log("当前关闭了 TUN 模式，无法执行进程级接管。请勾选 TUN模式 后重试。");
             MessageBox.Show("进程接管必须开启 TUN 模式。\n请勾选 TUN模式(需虚拟网卡) 后再开始接管。", "Delta 提示", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
+        var accelOk = await ApplyProcessAccelerationAsync(_activeProcess!, procPath);
+        if (!accelOk)
+        {
+            _status.Text = "状态：接管失败";
             return;
         }
 
@@ -740,13 +749,81 @@ public sealed class MainForm : Form
         }
     }
 
-    private void Rollback()
+    private async Task RollbackAsync()
     {
         _activeProcess = null;
         StopEngine();
+        await ResetProcessAccelerationAsync();
         _status.Text = "状态：未接管";
         _verifyStatus.Text = "验证：未执行";
         Log("已回滚（接管引擎已停止）");
+    }
+
+    private static string EscapePs(string s)
+    {
+        return (s ?? "").Replace("'", "''");
+    }
+
+    private static string SafePolicyName(string s)
+    {
+        var n = (s ?? "").ToLowerInvariant().Replace(" ", "_").Replace("-", "_");
+        var chars = n.Where(c => char.IsLetterOrDigit(c) || c == '_').ToArray();
+        return chars.Length == 0 ? "game" : new string(chars);
+    }
+
+    private async Task<bool> ApplyProcessAccelerationAsync(string processExeName, string processPath)
+    {
+        try
+        {
+            var baseName = Path.GetFileNameWithoutExtension(processExeName);
+            _qosPolicyName = "Delta_" + SafePolicyName(baseName);
+
+            var removePs = $"$p=Get-NetQosPolicy -Name '{EscapePs(_qosPolicyName)}' -PolicyStore ActiveStore -ErrorAction SilentlyContinue; if($p){{ Remove-NetQosPolicy -Name '{EscapePs(_qosPolicyName)}' -PolicyStore ActiveStore -Confirm:$false }}";
+            _ = await RunHiddenAsync("powershell.exe", $"-NoProfile -ExecutionPolicy Bypass -Command \"{removePs}\"");
+
+            var createPs = $"New-NetQosPolicy -Name '{EscapePs(_qosPolicyName)}' -AppPathNameMatchCondition '{EscapePs(processPath)}' -DSCPAction 46 -IPProtocolMatchCondition Both -NetworkProfile All -PolicyStore ActiveStore";
+            var createRes = await RunHiddenAsync("powershell.exe", $"-NoProfile -ExecutionPolicy Bypass -Command \"{createPs}\"");
+            if (createRes.ExitCode != 0)
+            {
+                FailEngine(EngineError.ConfigWriteFailed, "QoS策略创建失败", createRes.StdErr + createRes.StdOut);
+                return false;
+            }
+
+            var priPs = $"Get-Process -Name '{EscapePs(baseName)}' -ErrorAction SilentlyContinue | ForEach-Object {{ $_.PriorityClass = 'High' }}";
+            _ = await RunHiddenAsync("powershell.exe", $"-NoProfile -ExecutionPolicy Bypass -Command \"{priPs}\"");
+            Log($"已应用进程加速：QoS={_qosPolicyName}, Priority=High");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            FailEngine(EngineError.Unknown, "应用进程加速失败", ex.ToString());
+            return false;
+        }
+    }
+
+    private async Task ResetProcessAccelerationAsync()
+    {
+        try
+        {
+            if (!string.IsNullOrWhiteSpace(_qosPolicyName))
+            {
+                var removePs = $"$p=Get-NetQosPolicy -Name '{EscapePs(_qosPolicyName)}' -PolicyStore ActiveStore -ErrorAction SilentlyContinue; if($p){{ Remove-NetQosPolicy -Name '{EscapePs(_qosPolicyName)}' -PolicyStore ActiveStore -Confirm:$false }}";
+                _ = await RunHiddenAsync("powershell.exe", $"-NoProfile -ExecutionPolicy Bypass -Command \"{removePs}\"");
+            }
+
+            if (!string.IsNullOrWhiteSpace(_activeProcess))
+            {
+                var baseName = Path.GetFileNameWithoutExtension(_activeProcess);
+                var priPs = $"Get-Process -Name '{EscapePs(baseName)}' -ErrorAction SilentlyContinue | ForEach-Object {{ $_.PriorityClass = 'Normal' }}";
+                _ = await RunHiddenAsync("powershell.exe", $"-NoProfile -ExecutionPolicy Bypass -Command \"{priPs}\"");
+            }
+
+            Log("已清理进程加速策略");
+        }
+        catch (Exception ex)
+        {
+            Log("清理进程加速策略失败: " + ex.Message);
+        }
     }
 
     private async Task<bool> StartEngineAsync(string? processName)
